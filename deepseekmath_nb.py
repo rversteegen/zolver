@@ -24,7 +24,7 @@
 # %% jupyter={"outputs_hidden": false}
 %%time
 import os
-# Try reduce wasted memory due to small 11MB allocations consuming 20MB blocks. Prevents OOM
+# Try reduce wasted memory due to small 11MB allocations consuming 20MB blocks
 #os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  #"max_split_size_mb:256"  #
 #PYTORCH_NO_CUDA_MEMORY_CACHING=1
 
@@ -37,9 +37,10 @@ if os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
 else:
     PRIVATE = False
 
-SLOW = False # = PRIVATE
+SLOW = True # = PRIVATE
 LOGGING = not PRIVATE
 VALIDATE = False #"AMC_12"
+FIRSTPROB = 0  # ignored for PRIVATE
 if PRIVATE:
     SLOW = True
     VALIDATE = False
@@ -52,20 +53,20 @@ MODEL_PATH = "/kaggle/input/deepseek-math"
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 N_REPETITIONS = 8 if VALIDATE else (20 if SLOW else 1)
 MAX_GEN_TOKENS = 1500 if SLOW else 500  #CHANGE
-MAX_SINGLE_GEN_TOKENS = 700 #1500
-MAX_TOKENS = 1650 if (P100 and USE_PAST_KEY) else 2048
-    
+MAX_SINGLE_GEN_TOKENS = 1500 #1500
+MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
+
 if PRIVATE:
     NPROBS = 50
     TIME_LIMIT = 31000
 elif VALIDATE:
-    NPROBS = 70 #100
+    NPROBS = 30 #100
     TIME_LIMIT = 40000
 else:
-    NPROBS = 10
+    NPROBS = 1  #10
     TIME_LIMIT = 450
     
-LOG_TAG = f"70ofAMC12_Q{QUANT if QUANT else 'off'}_{MAX_GEN_TOKENS}-{MAX_SINGLE_GEN_TOKENS}tok_{'P100' if P100 else '2xT4'}"
+LOG_TAG = f"30ofAMC12_Q{QUANT if QUANT else 'off'}_{MAX_GEN_TOKENS}-{MAX_SINGLE_GEN_TOKENS}tok_{'P100' if P100 else '2xT4'}_didprove"
 LOG_NAME = time.strftime("%Y%m%d-%H%M-") + LOG_TAG + ".csv"
    
 
@@ -77,9 +78,9 @@ print(f"P100={P100}, DEVICE={DEVICE}, QUANT={QUANT}, SLOW={SLOW}")
 
 # %% jupyter={"outputs_hidden": false}
 %%time
-!pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
-!pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
-if False and QUANT and not 'installed_libs' in globals():
+#!pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
+#!pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
+if QUANT and not 'installed_libs' in globals():
     # Need more recent accelerate
     !pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
     !pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
@@ -130,8 +131,8 @@ if not PRIVATE:
                 self.df = self.df.reset_index().sample(frac=1).reset_index(drop=True)
 
             self.predict_called = True
-            self.counter = 30
-            self.len = len(self.df)
+            self.counter = FIRSTPROB
+            self.len = min(FIRSTPROB + NPROBS, len(self.df))
 
         def iter_test(self):
              while self.counter < self.len:
@@ -156,7 +157,7 @@ if not PRIVATE:
         def predict(self, answer):
             self.df.loc[self.counter, ('answer')] = answer['answer'].values[0]
             self.predict_called = True
-            self.counter+=1
+            self.counter += 1
 
     make_env = train_env
     #env = train_env(randomize=True)
@@ -264,7 +265,7 @@ def process_text_output(result):
     try:
          
         #result_output = re.findall(r'\\boxed\{(-?\d+[.]?\d*(?:e\d+)?)\}', result)
-        result_output = re.findall(r'\\boxed\s*{\s*(.*)}', result)
+        result_output = re.findall(r'\\boxed\s*{\s*([^}]+)}', result)
 
         if len(result_output) == 0:
             result_output = naive_parse(result)
@@ -280,7 +281,7 @@ def process_text_output(result):
         if len(result_output) == 0:
             result_output = -1
         else:
-            result_output = round(float(eval(result_output))) % 1000
+            result_output = round(float(eval(result_output)))
     except Exception as e:
         print(e)
         print('ERROR PARSING TEXT')
@@ -379,20 +380,29 @@ show_mem()
 
 # %% jupyter={"outputs_hidden": false}
 class StoppingCriteriaSub(transformers.StoppingCriteria):
-    def __init__(self, stops = [], encounters=1):
+    def __init__(self, stops = []):
         super().__init__()
-        self.stops = [stop.to("cuda") for stop in stops]
+        stoplists = [tokenizer(stop_word, return_tensors='pt', add_special_tokens=False)['input_ids'][0] for stop_word in stops]
+        self.stops = [stop.to("cuda") for stop in stoplists]
+        self.ignore_count = 0
 
     def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
         for stop in self.stops:
             suffix = input_ids[0][-len(stop):]
             if torch.all(torch.eq(stop, suffix)):
-                return True
+                if self.ignore_count <= 0:
+                    return True
+                print("  !ignoring stop!")
+                self.ignore_count -= 1
         return False
 
-stop_words = ["```output", "```python", "```\nOutput" , ")\n```" , "```\n", "\n```\n", "``````"] #,  
-stop_words_ids = [tokenizer(stop_word, return_tensors='pt', add_special_tokens=False)['input_ids'].squeeze() for stop_word in stop_words]
-stopping_criteria = transformers.StoppingCriteriaList([StoppingCriteriaSub(stops=stop_words_ids)])
+# ```->[10897], ````->[4885, 4885], `````->[4885, 10897], ``````->[4885, 4885, 4885]
+stop_words = ["```output", "```python", "```\nOutput" , ")\n```" , "```\n", "````"]
+main_stoplist = StoppingCriteriaSub(stop_words)
+error_stoplist = StoppingCriteriaSub([" error", " mistake"])
+
+stopping_criteria = transformers.StoppingCriteriaList([main_stoplist])
+error_stopping_criteria = transformers.StoppingCriteriaList([main_stoplist, error_stoplist])
 
 # %% jupyter={"outputs_hidden": false}
 torch.cuda.empty_cache()
@@ -423,7 +433,16 @@ prompt_options = [code2, code, cot]
 
 # You can run multiple code blocks to reach the answer in steps.
 
-code = ("elab1", """Below is a math problem you are to solve (positive numerical answer):
+#aka 'code' in V9 soln
+elab0 = ("elab0", """Below is a math problem you are to solve (positive numerical answer):
+\"{}\"
+To accomplish this, first determine a sympy-based approach for solving the problem by listing each step to take and what functions need to be called in each step. 
+You can run multiple code blocks to reach the answer in steps.
+Be clear so even an idiot can follow your instructions, and remember, your final answer should be positive integer, not an algebraic expression!
+Write the entire script covering all the steps (use comments and document it well) and print the result. After solving the problem, output the final numerical answer within \\boxed{{}}.""",
+"Approach:")
+
+elab1 = ("elab1", """Below is a math problem you are to solve (positive numerical answer):
 \"{}\"
 To accomplish this, first determine a sympy-based approach for solving the problem by listing each step to take and what functions need to be called in each step. 
 Be clear so even an idiot can follow your instructions, and remember, your final answer should be positive integer, not an algebraic expression!
@@ -442,13 +461,13 @@ cot2 = ("shortpkg0", """Here's a problem, with a positive integer answer!
 Analyze step by step and use python/sympy/numpy/scipy/etc to do any calculations or find solutions. After solving the problem, output the final integer answer within \\boxed{{}}.""",
        "")
 
-
-
-code2 = ("anal0",
+# analy0 == code2 in V9
+# analy1 adds "No docstrings."
+analy1 = ("analy1",
     """Consider this math problem:
 \"{}\"
 First, analyze the implications of the problem statement and restate it more mathematically. Write code to check assumptions, to simplify the problem.
-Write out commented Sympy code to compute the numerical answer and print the result.
+Write out commented Sympy code to compute the numerical answer and print the result. But no docstrings.
 Think step by step to come to a solution with programs. After solving the problem, output the final integer answer within \\boxed{{}}.""",
         "")
 
@@ -459,10 +478,16 @@ cot = ("cot1",  """Below is a math problem you are to solve (positive integer an
 Write an efficient python program to solve it. Write out the whole program and print the result so it will run. If it doesn't work, don't try the same thing repeatedly. Be concise. Please reason step by step, and put your final answer within \\boxed{{}}.""",
     "Our approach")
 
-steps = ("consise-steps0",  """\"{}\"
+steps0 = ("consise-steps0",  """\"{}\"
 
 Think step by step writing python code to solve this problem. Get to the point. Maths only, no chatting with me. Write out the whole program and print the result.
 If it doesn't work and you can't fix it then stop. Put your final answer within \\boxed{{}}. It must be a positive integer.""",
+""        )
+
+stepver1 = ("con-step-ver1",  """\"{}\"
+
+Think step by step analyzing and writing python code to solve this problem. Get to the point. Maths only, no chatting with me. Write out the whole program and print the result. No docstrings.
+Verify your result and stop if it's wrong. Put your final answer within \\boxed{{}}. It must be a positive integer.""",
 ""        )
 
 verifyXX = ("verify0", """Below is a math problem you are to solve (positive numerical answer):
@@ -475,7 +500,9 @@ Verify your answer is correct, with some test code if you can. If it is correct 
 "Approach:\n")
 
 
-prompt_options = [code, cot, steps]  # cot2
+prompt_options = [elab0, analy1, steps0, stepver1] #, code, code2, cot, steps]  # cot2
+# Like V9
+prompt_options = [elab0, analy1, steps0]
 
 
 # %% jupyter={"outputs_hidden": false}
@@ -488,6 +515,7 @@ class LLMGenerator:
         self.past_key_values = None
         self.hit_limit = False
         self.need_update = True
+        self.stop_on_error = True
 
     def update_inputs(self):
         if True:
@@ -504,15 +532,16 @@ class LLMGenerator:
     def user_prompt(self, text, assist_prefix = ""):
         old_input = len(self.tokens)
         if True:
+            ol = len(self.prompt)
             if old_input and not self.prompt.endswith('<｜end▁of▁sentence｜>'):
                 self.prompt += '<｜end▁of▁sentence｜>'
-            self.prompt += ("User: " + text.lstrip() + "\n\nAssistant: " + assist_prefix.strip(' ')).strip(' ')
+            self.prompt += ("User: " + text.strip() + "\n\nAssistant: " + assist_prefix.strip(' ')).strip(' ')
         else:
             self.messages += [{"role": "user", "content": text}]
             if assist_prefix:
                 self.messages.append({"role": "assistant", "content": assist_prefix})
         self.update_inputs()
-        print(f"<<<<<PROMPT {self.input_len - old_input} tokens\n" + text + ">>>>>")
+        print(f"<<<<<PROMPT {self.input_len - old_input} tokens\n" + self.prompt[ol:] + ">>>>>")
 
     def append_prompt(self, text):
         text = text.rstrip(' ')
@@ -541,6 +570,10 @@ class LLMGenerator:
         
         if self.need_update:
             self.update_inputs()
+        if self.stop_on_error:
+            stopper = error_stopping_criteria
+        else:
+            stopper = stopping_criteria
         
         generation_output = model.generate(**self.model_inputs, 
                                            max_new_tokens = min(limit, max_toks),
@@ -552,7 +585,7 @@ class LLMGenerator:
                                            top_p = top_p,
                                            pad_token_id = tokenizer.eos_token_id,
                                            num_return_sequences = 1,
-                                           stopping_criteria = stopping_criteria)
+                                           stopping_criteria = stopper)
 
         if USE_PAST_KEY:
             self.tokens = generation_output.sequences[0]
@@ -590,7 +623,7 @@ class LLMGenerator:
         return self.decoded_output.endswith(text)
 
 if LOGGING:
-    logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'score', 'answer', 'result_info', 'gen_tokens', 'code_blocks', 'code_errors', 'time'])
+    logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'score', 'answer', 'result_info', 'gen_tokens', 'code_blocks', 'code_errors', 'time', 'bad'])
     
 
 def predict(probi, problem):
@@ -631,6 +664,8 @@ def predict(probi, problem):
         last_code_error = None
         code_error_count = 0
         code_blocks = 0
+        #error_word_count = 0
+        error_stoplist.ignore_count = 2  # Stop on the third mention of "error" or "mistake"
         prev_code_len = 0
         bad = False
         result_output = -1
@@ -643,6 +678,7 @@ def predict(probi, problem):
             gen = LLMGenerator()
 
             promptname, prompt, assist = prompt_options[(firstprompt+jj) % len(prompt_options)]  #random.choice(prompt_options)
+            print("prompt", promptname)
             if LOGGING:
                 logrow.prompt = promptname
             gen.user_prompt(prompt.format(problem), assist)
@@ -651,6 +687,10 @@ def predict(probi, problem):
             while not gen.hit_limit and gen.check_limit() > 3:
                 if gen.tokens[-1] == tokenizer.eos_token_id:
                     result_info = "eos"
+                    break
+                if gen.endswith("mistake") or (gen.stop_on_error and gen.endswith("error")):  # mistake also in stop_words
+                    print("MISTAKE")
+                    bad = True
                     break
                 if not any(gen.endswith(stop_word) for stop_word in stop_words):
                     # No continuation, and didn't hit limit, so must have ended due to eos.
@@ -661,6 +701,7 @@ def predict(probi, problem):
                 if gen.endswith("```python"):
                     temperature_inner = temperature_coding
                     top_p_inner = top_p_coding
+                    code_status = True
                 else:
                     temperature_inner = temperature
                     top_p_inner = top_p
@@ -689,16 +730,17 @@ def predict(probi, problem):
                             code_output = code_output[prev_code_len:].strip()
                             prev_code_len = new_len
                             try:
-                                last_code_result = round(float(eval(code_output.strip().split("\n")[-1]))) % 1000
+                                last_code_result = round(float(eval(code_output.strip().split("\n")[-1])))
                             except:
                                 pass
                         else:
-                            # code_output is the exception line
-                            if code_output == last_code_error:
+                            # the last line is the exception
+                            except_line = code_output.strip().split("\n")[-1]
+                            if except_line == last_code_error:
                                 code_error_count += 1
                             else:
                                 code_error_count = 1
-                            last_code_error = code_output
+                            last_code_error = except_line
                             if code_error_count >= 2:
                                 bad = True
                                 print("REPEATED ERROR")
@@ -732,9 +774,14 @@ def predict(probi, problem):
                     # else:
                     #     pass #cumulative_code = ""
 
+                if code_status == False:
+                    gen.stop_on_error = False   # Don't stop on "error", the LLM may say "to fix the error"
+                else:
+                    gen.stop_on_error = True
                 gen.generate(temperature_inner, top_p_inner)
 
             boxed = False
+            penalty = 0
             confident = ""
             if gen.hit_limit:
                 print("HIT LIMIT")
@@ -743,17 +790,27 @@ def predict(probi, problem):
                 # Not necessarily bad, maybe can salvage answer from code_output
             elif not bad:
                 result_output, boxed = process_text_output(gen.new_output)
-                if not boxed:
+                if result_output != -1 and last_code_result != -1 and result_output != last_code_result:
+                    print("HMM... TEXT/CODE MISMATCH")
+                    penalty = 0.1
+                    # BAd idea since the agent will almost certainly agree
+                    #if gen.check_limit() > 45:
+                    #    gen.user_prompt(f"Is the answer actually {last_code_result}? If you know it put it in \\boxed{{}}")
+                    #    gen.generate(0.2, top_p, 20)
+                    #    result_output, boxed = process_text_output(gen.decoded_output)
+                    #    if result_output == last_code_result:
+                    #        penalty = 0
+                    
+                if not boxed and gen.check_limit() > 23:
                     # Trying again
                     print("FORCING BOXED")
-                    # FIXME: missing eos token, but probably doesn't matter.
-                    gen.user_prompt("If you know the answer put it in \boxed")
+                    gen.user_prompt("If you know the answer put it in \\boxed{}")
                     gen.generate(0.2, top_p)
                     result_output, boxed = process_text_output(gen.decoded_output)
-                    if gen.check_limit() > 23:
-                        gen.user_prompt("Did you verify?")
-                        gen.generate(0.2, top_p, 3)
-                        confident = gen.new_output.lower()
+                if penalty == 0 and boxed and gen.check_limit() > 23:
+                    gen.user_prompt("Is it proven?")
+                    gen.generate(0.2, top_p, 3)
+                    confident = gen.new_output.lower()
             
             if bad:
                 pass
@@ -784,14 +841,14 @@ def predict(probi, problem):
                 score -= 0.1
             if 1 <= code_blocks <= 3:
                 score += 0.15
+            score -= penalty
                     
-        #except subprocess.TimeoutExpired:   #DUMMY FIXME!!!!!
-        #    pass
-
+        #except OutOfMemoryError:
         except Exception as e:
             print("predict() EXCEPTION")
             print(e)
-            result_output = -1
+            #result_output = -1
+            bad = 2
         
         if LOGGING:
             # ['problem_id', 'prompt', 'score', 'answer', 'result_info', 'gen_tokens', 'code_errors', 'time'])
@@ -801,10 +858,12 @@ def predict(probi, problem):
             logrow.score = score
             logrow.answer = result_output
             logrow.time = time.time() - it_start_time
+            logrow.bad = bad
             logdf = pd.concat([logdf, logrow])
             logdf.to_csv(LOG_NAME)
 
-        if not bad and result_output > -1:
+        if result_output > -1:  # and not bad
+            result_output = result_output % 1000
             outputs.append((result_output, score, result_info))
             answer_scores[result_output] += max(0, score)
 
