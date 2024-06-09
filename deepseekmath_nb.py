@@ -45,11 +45,13 @@ if PRIVATE:
     SLOW = True
     VALIDATE = False
 DEBUG = False
+OLDCODE = True
 P100 = (torch.cuda.device_count() == 1)
 QUANT = False
 USE_PAST_KEY = True
 SEED = 314
 MODEL_PATH = "/kaggle/input/deepseek-math"
+RELOAD_MODEL = False
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 N_REPETITIONS = 8 if VALIDATE else (20 if SLOW else 1)
 MAX_GEN_TOKENS = 1500 if SLOW else 500  #CHANGE
@@ -78,21 +80,11 @@ print(f"P100={P100}, DEVICE={DEVICE}, QUANT={QUANT}, SLOW={SLOW}")
 
 # %% jupyter={"outputs_hidden": false}
 %%time
-#!pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
-#!pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
 if QUANT and not 'installed_libs' in globals():
     # Need more recent accelerate
     !pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
     !pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
     installed_libs = True
-#try:
-#    import accelerate
-#except ModuleNotFoundError:
-#    !pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
-#try:
-#    import bitsandbytes
-#except ModuleNotFoundError:
-#    !pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
 
 # %% jupyter={"outputs_hidden": false}
 import os
@@ -160,17 +152,15 @@ if not PRIVATE:
             self.counter += 1
 
     make_env = train_env
-    #env = train_env(randomize=True)
 else:
     # Set up the evaluation API
     import aimo
 
     make_env = aimo.make_env
-    #env = aimo.make_env()
 
 
 # %% [markdown]
-# # Important Custom Functions
+# # Code processing
 
 # %% jupyter={"outputs_hidden": false}
 def output_line(output, n):
@@ -253,6 +243,11 @@ def process_code(code):
 
     return return_value, code_status
 
+
+# %% [markdown]
+# # Text processing
+
+# %% jupyter={"outputs_hidden": false}
 def naive_parse(text):
     "Naive parsing function to find the last number in a string"
     numbers = re.findall("[0-9]+\.?[0-9]*", text)
@@ -289,14 +284,108 @@ def process_text_output(result):
     
     return result_output, boxed
 
+
+# %% [markdown]
+# # OLD Code process
+
+# %%
+#####################################
+
+def return_last_print(output, n):
+    lines = output.strip().split('\n')
+    if lines:
+        return lines[n]
+    else:
+        return ""
+
+def repl(match):
+    if "real" not in match.group():
+        return "{}{}".format(match.group()[:-1], ', real=True)')
+    else:
+        return "{}{}".format(match.group()[:-1], ')')
+
+def process_code(code, return_shell_output=True):
+    
+    code = re.sub(r"symbols\([^)]+\)", repl, code)
+
+    if return_shell_output:
+        code = code.replace('\n', '\n    ')
+            # Add a try...except block
+        code = "\ntry:\n    from sympy import *\n{}\nexcept Exception as e:\n    print(e)\n    print('FAIL')\n".format(code)
+    
+    if not return_shell_output:
+        print(code)
+    with open('code.py', 'w') as fout:
+        fout.write(code)
+    
+    batcmd = 'timeout 7 ' + sys.executable + ' code.py'
+    try:
+        shell_output = subprocess.check_output(batcmd, shell=True).decode('utf8')
+        return_value = return_last_print(shell_output, -1)
+        print(shell_output)
+        if return_shell_output:
+            if return_value=='FAIL':
+                CODE_STATUS = False
+                return_value = return_last_print(shell_output, -2)
+                if "not defined" in return_value:
+                    return_value+='\nTry checking the formatting and imports'
+            else:
+                CODE_STATUS = True
+            return return_value, CODE_STATUS  
+        code_output = round(float(eval(return_value))) % 1000
+    except Exception as e:
+        print(e,'shell_output')
+        code_output = -1
+    
+    if return_shell_output:
+        if code_output==-1:
+            CODE_STATUS = False
+        else:
+            CODE_STATUS = True
+        return code_output, CODE_STATUS  
+    
+
+
+
+# %% [markdown]
+# # Util
+
+# %%
+def show_gpu_mem():
+    for i in range(torch.cuda.device_count()):
+        alloc = torch.cuda.memory_allocated(i)
+        reserved = torch.cuda.memory_reserved(i)
+        free, total = torch.cuda.mem_get_info(i)
+        print(f"CUDA dev {i}: free={free/2**30 :.2f} used={alloc/2**30 :.2f} + reserved={(reserved - alloc)/2**30:.2f} / {total/2**30:.1f} GB")
+        
+def gpu_mem():
+    ret = ""
+    for i in range(torch.cuda.device_count()):
+        reserved = torch.cuda.memory_reserved(i)
+        ret += f"(cuda{i}: {reserved/2**30 :.2f}GB) "
+    return ret
+
 def cpu_time() -> str:
     threadt = time.clock_gettime(time.CLOCK_THREAD_CPUTIME_ID)
     processt = time.clock_gettime(time.CLOCK_PROCESS_CPUTIME_ID)
     return f"{threadt:.1f}/{processt:.1f}s CPU"
 
+def show_model_mem(m):
+    class MemUse: params, bufs = 0, 0
+    counts = defaultdict(MemUse)
+    for buf in model.parameters():
+        counts[buf.device].params += buf.numel() * buf.itemsize
+    for buf in model.buffers():
+        counts[buf.device].bufs += buf.numel() * buf.itemsize
+    print("Model parameters+buffers:")
+    for dev in counts:
+        print(f"  {dev}: {counts[dev].params / 2**30 :.2f} + {counts[dev].bufs / 2**30 :.2f} GB")
+    mem = model.get_memory_footprint()
+    print("  Total:", "%.2f GB" % (mem / 2**30))
+
 
 # %% [markdown]
-# # Start of code
+# # Load model
 
 # %% jupyter={"outputs_hidden": false}
 %%time
@@ -340,42 +429,28 @@ else:
     else:
         model_kwargs['device_map'] = device_map
 
-model = None
-gc.collect()
-torch.cuda.empty_cache()
-model = transformers.AutoModelForCausalLM.from_pretrained(
-    MODEL_PATH,
-    torch_dtype="auto",
-    trust_remote_code=True,
-    config=config,
-    **model_kwargs
-)
+if not 'model' in globals() or RELOAD_MODEL:
+    model = None
+    gc.collect()
+    torch.cuda.empty_cache()
+    model = transformers.AutoModelForCausalLM.from_pretrained(
+        MODEL_PATH,
+        torch_dtype="auto",
+        trust_remote_code=True,
+        config=config,
+        **model_kwargs
+    )
 
 # Disable memory-efficient sparse tensors for CUDA operations
 torch.backends.cuda.enable_mem_efficient_sdp(False)
 
-print(model)
+#print(model)
 print()
-print(model.dtype, model.hf_device_map)
+print("Model", MODEL_PATH)
+print("dtype", model.dtype, model.hf_device_map)
 
-mem = model.get_memory_footprint()
-print("mem usage:", "%.2fGB" % (mem / 2**30))
-
-def show_mem():
-    for i in range(torch.cuda.device_count()):
-        alloc = torch.cuda.memory_allocated(i)
-        reserved = torch.cuda.memory_reserved(i)
-        free, total = torch.cuda.mem_get_info(i)
-        print(f"CUDA dev {i}: free={free/2**30 :.2f} used={alloc/2**30 :.2f} + reserved={(reserved - alloc)/2**30:.2f} / {total/2**30:.1f} GB")
-        
-def gpu_mem():
-    ret = ""
-    for i in range(torch.cuda.device_count()):
-        reserved = torch.cuda.memory_reserved(i)
-        ret += f"(cuda{i}: {reserved/2**30 :.2f}GB) "
-    return ret
-        
-show_mem()
+show_model_mem(model)
+show_gpu_mem()
 
 
 # %% jupyter={"outputs_hidden": false}
@@ -407,6 +482,9 @@ error_stopping_criteria = transformers.StoppingCriteriaList([main_stoplist, erro
 # %% jupyter={"outputs_hidden": false}
 torch.cuda.empty_cache()
 gc.collect()
+
+# %% [markdown]
+# # Prompts
 
 # %% jupyter={"outputs_hidden": false}
 code = ("""Dear professor, consider this math problem:
@@ -504,6 +582,9 @@ prompt_options = [elab0, analy1, steps0, stepver1] #, code, code2, cot, steps]  
 # Like V9
 prompt_options = [elab0, analy1, steps0]
 
+
+# %% [markdown]
+# # Generation and main loop
 
 # %% jupyter={"outputs_hidden": false}
 
@@ -673,7 +754,7 @@ def predict(probi, problem):
         code_output = "-1"
         last_code_result = -1
         cumulative_code = ""
-
+        
         try:
             gen = LLMGenerator()
 
@@ -714,52 +795,85 @@ def predict(probi, problem):
                         else:
                             code_text = gen.decoded_output.split('```python')[-1].split("```")[0]
 
-                        all_code = cumulative_code + code_text
-                        code_output, code_status = process_code(all_code)
-                        #print('<<<<<CODE RESULTS\n' + code_output + ">>>>>")
+                        if OLDCODE:
+                            cumulative_code+=code_text
+                            code_output, code_status = process_code(cumulative_code, return_shell_output=True)
+                            print('CODE RESULTS', code_output)
 
-                        code_blocks += 1
-                        if LOGGING:
+                            if last_code_error==code_output:
+                                code_error_count+=1
+                            else:
+                                last_code_error=code_output
+                                code_error_count = 0
+
                             if not code_status:
-                                logrow.code_errors += 1
+                                cumulative_code = cumulative_code[:-len(code_text)]
 
-                        if code_status == True:
-                            code_error_count = 0
-                            cumulative_code += code_text
-                            new_len = len(code_output)
-                            code_output = code_output[prev_code_len:].strip()
-                            prev_code_len = new_len
+                                if code_error_count>=1:
+                                    print("REPEATED ERRORS")
+                                    # bad = True ????????
+                                    break
+                                    
                             try:
-                                last_code_result = round(float(eval(code_output.strip().split("\n")[-1])))
+                                # code_output is -1 or a string
+                                last_code_result = int(code_output)
                             except:
                                 pass
                         else:
-                            # the last line is the exception
-                            except_line = code_output.strip().split("\n")[-1]
-                            if except_line == last_code_error:
-                                code_error_count += 1
+                            
+                            all_code = cumulative_code + code_text
+                            code_output, code_status = process_code(all_code)
+
+                            #print('<<<<<CODE RESULTS\n' + code_output + ">>>>>")
+
+                            code_blocks += 1
+                            if LOGGING:
+                                if not code_status:
+                                    logrow.code_errors += 1
+
+                            if code_status == True:
+                                code_error_count = 0
+                                cumulative_code += code_text
+                                new_len = len(code_output)
+                                code_output = code_output[prev_code_len:].strip()
+                                prev_code_len = new_len
+                                try:
+                                    last_code_result = round(float(eval(code_output.strip().split("\n")[-1])))
+                                except:
+                                    pass
                             else:
-                                code_error_count = 1
-                            last_code_error = except_line
-                            if code_error_count >= 2:
-                                bad = True
-                                print("REPEATED ERROR")
-                                break
+                                # the last line is the exception
+                                except_line = code_output.strip().split("\n")[-1]
+                                if except_line == last_code_error:
+                                    code_error_count += 1
+                                else:
+                                    code_error_count = 1
+                                last_code_error = except_line
+                                if code_error_count >= 2:
+                                    bad = True
+                                    print("REPEATED ERROR")
+                                    break
 
                     except Exception as e:
                         print(e)
                         print('ERROR PARSING CODE')
                         code_output = ""
 
+                    if OLDCODE and (code_output == "" or code_output == -1):
+                        # Add nothing to prompt
+                        out = ""
+                        cumulative_code = ""
                     #if gen.endswith(")\n```"):
-                    if gen.endswith("```") or gen.endswith("```\n"):
-                        out = '```output\n' + code_output + '\n```\n'
+                    elif gen.endswith("```") or gen.endswith("```\n"):
+                        out = '```output\n' + str(code_output) + '\n```\n'
                     elif gen.endswith("```output") or gen.endswith("```output\n"):
-                        out = code_output + '\n```\n'
+                        out = str(code_output) + '\n```\n'
                     else:
                         print("(((doesn't end with ``` or ```output)))")
-                        #gen.append_prompt('\n' + code_output + '\n```\n')
-                        out = '>>> ' + code_output + '\n\n'
+                        if OLDCODE:
+                            out = '\n' + str(code_output) + '\n```\n'
+                        else:
+                            out = '>>> ' + str(code_output) + '\n\n'
                     if not gen.endswith("\n"):
                         out = "\n" + out
                     gen.append_prompt(out)
@@ -843,7 +957,7 @@ def predict(probi, problem):
                 score += 0.15
             score -= penalty
                     
-        #except OutOfMemoryError:
+        #except OutOfMemoryError as e:
         except Exception as e:
             print("predict() EXCEPTION")
             print(e)
@@ -863,6 +977,7 @@ def predict(probi, problem):
             logdf.to_csv(LOG_NAME)
 
         if result_output > -1:  # and not bad
+            print(f"RESULT = {result_output} SCORE = {score}")
             result_output = result_output % 1000
             outputs.append((result_output, score, result_info))
             answer_scores[result_output] += max(0, score)
