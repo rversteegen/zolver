@@ -46,6 +46,7 @@ if PRIVATE:
     VALIDATE = False
 DEBUG = False
 OLDCODE = True
+ASK_CONFIDENCE = False  # "Is it proven?"
 P100 = (torch.cuda.device_count() == 1)
 QUANT = False
 USE_PAST_KEY = True
@@ -54,9 +55,10 @@ MODEL_PATH = "/kaggle/input/deepseek-math"
 RELOAD_MODEL = False
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 N_REPETITIONS = 8 if VALIDATE else (20 if SLOW else 1)
-MAX_GEN_TOKENS = 1500 if SLOW else 500  #CHANGE
-MAX_SINGLE_GEN_TOKENS = 1500 #1500
-MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
+MAX_GEN_TOKENS = 2048 if SLOW else 500  #CHANGE
+MAX_SINGLE_GEN_TOKENS = 2048 #1500
+#MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
+MAX_TOKENS = 2048
 
 if PRIVATE:
     NPROBS = 50
@@ -226,7 +228,7 @@ def process_code(code):
         #if output_line(shell_output, -1) == 'FAIL':
             code_status = False
             return_value = clean_traceback(shell_output)
-            #return_value = output_line(shell_output, -2)  # Last line of exception
+            return_value = output_line(shell_output, -1)  # Last line of exception  ######
             if "not defined" in return_value:
                 return_value += '\nTry checking the formatting and imports'
         else:
@@ -291,58 +293,60 @@ def process_text_output(result):
 # %%
 #####################################
 
-def return_last_print(output, n):
-    lines = output.strip().split('\n')
-    if lines:
-        return lines[n]
-    else:
-        return ""
+if OLDCODE:
 
-def repl(match):
-    if "real" not in match.group():
-        return "{}{}".format(match.group()[:-1], ', real=True)')
-    else:
-        return "{}{}".format(match.group()[:-1], ')')
+    def return_last_print(output, n):
+        lines = output.strip().split('\n')
+        if lines:
+            return lines[n]
+        else:
+            return ""
 
-def process_code(code, return_shell_output=True):
-    
-    code = re.sub(r"symbols\([^)]+\)", repl, code)
+    def repl(match):
+        if "real" not in match.group():
+            return "{}{}".format(match.group()[:-1], ', real=True)')
+        else:
+            return "{}{}".format(match.group()[:-1], ')')
 
-    if return_shell_output:
-        code = code.replace('\n', '\n    ')
-            # Add a try...except block
-        code = "\ntry:\n    from sympy import *\n{}\nexcept Exception as e:\n    print(e)\n    print('FAIL')\n".format(code)
-    
-    if not return_shell_output:
-        print(code)
-    with open('code.py', 'w') as fout:
-        fout.write(code)
-    
-    batcmd = 'timeout 7 ' + sys.executable + ' code.py'
-    try:
-        shell_output = subprocess.check_output(batcmd, shell=True).decode('utf8')
-        return_value = return_last_print(shell_output, -1)
-        print(shell_output)
+    def process_code(code, return_shell_output=True):
+
+        code = re.sub(r"symbols\([^)]+\)", repl, code)
+
         if return_shell_output:
-            if return_value=='FAIL':
+            code = code.replace('\n', '\n    ')
+                # Add a try...except block
+            code = "\ntry:\n    from sympy import *\n{}\nexcept Exception as e:\n    print(e)\n    print('FAIL')\n".format(code)
+
+        if not return_shell_output:
+            print(code)
+        with open('code.py', 'w') as fout:
+            fout.write(code)
+
+        batcmd = 'timeout 7 ' + sys.executable + ' code.py'
+        try:
+            shell_output = subprocess.check_output(batcmd, shell=True).decode('utf8')
+            return_value = return_last_print(shell_output, -1)
+            print(shell_output)
+            if return_shell_output:
+                if return_value=='FAIL':
+                    CODE_STATUS = False
+                    return_value = return_last_print(shell_output, -2)
+                    if "not defined" in return_value:
+                        return_value+='\nTry checking the formatting and imports'
+                else:
+                    CODE_STATUS = True
+                return return_value, CODE_STATUS  
+            code_output = round(float(eval(return_value))) % 1000
+        except Exception as e:
+            print(e,'shell_output')
+            code_output = -1
+
+        if return_shell_output:
+            if code_output==-1:
                 CODE_STATUS = False
-                return_value = return_last_print(shell_output, -2)
-                if "not defined" in return_value:
-                    return_value+='\nTry checking the formatting and imports'
             else:
                 CODE_STATUS = True
-            return return_value, CODE_STATUS  
-        code_output = round(float(eval(return_value))) % 1000
-    except Exception as e:
-        print(e,'shell_output')
-        code_output = -1
-    
-    if return_shell_output:
-        if code_output==-1:
-            CODE_STATUS = False
-        else:
-            CODE_STATUS = True
-        return code_output, CODE_STATUS  
+            return code_output, CODE_STATUS  
     
 
 
@@ -511,13 +515,22 @@ prompt_options = [code2, code, cot]
 
 # You can run multiple code blocks to reach the answer in steps.
 
-#aka 'code' in V9 soln
+#similar to 'code' in V9 soln, but several changes
 elab0 = ("elab0", """Below is a math problem you are to solve (positive numerical answer):
 \"{}\"
 To accomplish this, first determine a sympy-based approach for solving the problem by listing each step to take and what functions need to be called in each step. 
 You can run multiple code blocks to reach the answer in steps.
 Be clear so even an idiot can follow your instructions, and remember, your final answer should be positive integer, not an algebraic expression!
 Write the entire script covering all the steps (use comments and document it well) and print the result. After solving the problem, output the final numerical answer within \\boxed{{}}.""",
+"Approach:")
+
+# Much closer to original V9. Replaces last line
+elab0rl = ("elab0rl", """Below is a math problem you are to solve (the answer is a positive integer):
+\"{}\"
+To accomplish this, first determine a sympy-based approach for solving the problem by listing each step to take and what functions need to be called in each step.
+Be clear so even an idiot can follow your instructions, and remember, your final answer should be an integer, not an algebraic expression!
+Write the entire script covering all the steps (use comments and document it well) and print the result."""
+           "\nPlease reason step by step, and put your final answer within \\boxed{{}}.",
 "Approach:")
 
 elab1 = ("elab1", """Below is a math problem you are to solve (positive numerical answer):
@@ -529,12 +542,30 @@ Don't try the same thing repeatedly if it doesn't work.
 Put your final integer answer within \\boxed{{}}.""",
 "Approach:\n")
 
-
-cot = ("short0", """Below is a math problem you are to solve (positive integer answer!):
+# cot0 == cot in V9
+# cot1 replaces 'numerical' with 'integer'
+cot1 = ("cot1", """Below is a math problem you are to solve (positive integer answer!):
 \"{}\"
-Analyze this problem and think step by step to come to a solution with programs. After solving the problem, output the final integer answer within \\boxed{{}}.""",)
+Analyze this problem and think step by step to come to a solution with programs. """
+"""After solving the problem, output the final integer answer within \\boxed{{}}.""",
+       )
 
-cot2 = ("shortpkg0", """Here's a problem, with a positive integer answer!
+cot1rl = ("cot1rl", """Below is a math problem you are to solve (the answer is a positive integer!):
+\"{}\"
+Analyze this problem and calculate the solution using python."""
+"\nPlease reason step by step, and put your final answer within \\boxed{{}}.",
+"")
+
+
+
+cot2 = ("cot2",  """Below is a math problem you are to solve (positive integer answer!):
+\"{}\"
+
+Write an efficient python program to solve it. Write out the whole program and print the result so it will run. If it doesn't work, don't try the same thing repeatedly. Be concise. Please reason step by step, and put your final answer within \\boxed{{}}.""",
+    "Our approach")
+
+
+cot3 = ("shortpkg0", """Here's a problem, with a positive integer answer!
 \"{}\"
 Analyze step by step and use python/sympy/numpy/scipy/etc to do any calculations or find solutions. After solving the problem, output the final integer answer within \\boxed{{}}.""",
        "")
@@ -550,11 +581,7 @@ Think step by step to come to a solution with programs. After solving the proble
         "")
 
 
-cot = ("cot1",  """Below is a math problem you are to solve (positive integer answer!):
-\"{}\"
 
-Write an efficient python program to solve it. Write out the whole program and print the result so it will run. If it doesn't work, don't try the same thing repeatedly. Be concise. Please reason step by step, and put your final answer within \\boxed{{}}.""",
-    "Our approach")
 
 steps0 = ("consise-steps0",  """\"{}\"
 
@@ -579,8 +606,10 @@ Verify your answer is correct, with some test code if you can. If it is correct 
 
 
 prompt_options = [elab0, analy1, steps0, stepver1] #, code, code2, cot, steps]  # cot2
-# Like V9
+# Similar to V9 but missing cot
 prompt_options = [elab0, analy1, steps0]
+
+prompt_options = [elab0rl, cot1rl]
 
 
 # %% [markdown]
@@ -616,7 +645,10 @@ class LLMGenerator:
             ol = len(self.prompt)
             if old_input and not self.prompt.endswith('<｜end▁of▁sentence｜>'):
                 self.prompt += '<｜end▁of▁sentence｜>'
-            self.prompt += ("User: " + text.strip() + "\n\nAssistant: " + assist_prefix.strip(' ')).strip(' ')
+            if True:
+                self.prompt += ("User: " + text.strip() + "\n\nAssistant: " + assist_prefix.strip(' ')).strip(' ')
+            else:
+                self.prompt += ("User: " + text.strip() + "\n\n" + assist_prefix.strip(' ')).strip(' ')
         else:
             self.messages += [{"role": "user", "content": text}]
             if assist_prefix:
@@ -921,8 +953,8 @@ def predict(probi, problem):
                     gen.user_prompt("If you know the answer put it in \\boxed{}")
                     gen.generate(0.2, top_p)
                     result_output, boxed = process_text_output(gen.decoded_output)
-                if penalty == 0 and boxed and gen.check_limit() > 23:
-                    gen.user_prompt("Is it proven?")
+                if ASK_CONFIDENCE and penalty == 0 and boxed and gen.check_limit() > 23:
+                    gen.user_prompt(ASK_CONFIDENCE)
                     gen.generate(0.2, top_p, 3)
                     confident = gen.new_output.lower()
             
