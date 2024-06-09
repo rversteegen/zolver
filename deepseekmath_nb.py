@@ -16,13 +16,19 @@
 
 # %% jupyter={"outputs_hidden": false}
 # credits:
-# https://www.kaggle.com/code/abdurrafae/improved-code-interpretation
+# 
+# Directly forked from https://www.kaggle.com/code/anrenk/aimo-llm-usage-clean-code
+# which derives from
+## https://www.kaggle.com/code/abdurrafae/improved-code-interpretation
 # https://www.kaggle.com/code/dnyaneshwalwadkar/submission-with-the-best-nb-new-api
 # https://www.kaggle.com/code/utsavsinghal2604/natural-language-and-code-integration
-# Forked from https://www.kaggle.com/code/anrenk/aimo-llm-usage-clean-code
+# The core implementation of prompting and executing python is apparently ultimately from
+# https://www.kaggle.com/code/olyatsimboy/aimo-zero-shot-sc-mmos-deepseekmath/notebook
+
+
 
 # %% jupyter={"outputs_hidden": false}
-%%time
+### %%time
 import os
 # Try reduce wasted memory due to small 11MB allocations consuming 20MB blocks
 #os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  #"max_split_size_mb:256"  #
@@ -39,13 +45,14 @@ else:
 
 SLOW = True # = PRIVATE
 LOGGING = not PRIVATE
-VALIDATE = False #"AMC_12"
+VALIDATE = "AMC_12_valid_old"
 FIRSTPROB = 0  # ignored for PRIVATE
 if PRIVATE:
     SLOW = True
     VALIDATE = False
 DEBUG = False
-OLDCODE = True
+OLDCODE = False  # Original code runner
+TB = True # Show traceback, OLDCODE=False only
 ASK_CONFIDENCE = False  # "Is it proven?"
 P100 = (torch.cuda.device_count() == 1)
 QUANT = False
@@ -54,23 +61,23 @@ SEED = 314
 MODEL_PATH = "/kaggle/input/deepseek-math"
 RELOAD_MODEL = False
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-N_REPETITIONS = 8 if VALIDATE else (20 if SLOW else 1)
+N_REPETITIONS = 6 if VALIDATE else (20 if SLOW else 1)
 MAX_GEN_TOKENS = 2048 if SLOW else 500  #CHANGE
 MAX_SINGLE_GEN_TOKENS = 2048 #1500
 #MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
-MAX_TOKENS = 2048
+MAX_TOKENS = 2200
 
 if PRIVATE:
     NPROBS = 50
     TIME_LIMIT = 31000
 elif VALIDATE:
     NPROBS = 30 #100
-    TIME_LIMIT = 40000
+    TIME_LIMIT = 7200
 else:
     NPROBS = 1  #10
     TIME_LIMIT = 450
     
-LOG_TAG = f"30ofAMC12_Q{QUANT if QUANT else 'off'}_{MAX_GEN_TOKENS}-{MAX_SINGLE_GEN_TOKENS}tok_{'P100' if P100 else '2xT4'}_didprove"
+LOG_TAG = f"15ofAMC12V_Q{QUANT if QUANT else 'off'}_{MAX_GEN_TOKENS}-{MAX_SINGLE_GEN_TOKENS}tok_{'P100' if P100 else '2xT4'}_noTB_{'didprove' if ASK_CONFIDENCE else ''}"
 LOG_NAME = time.strftime("%Y%m%d-%H%M-") + LOG_TAG + ".csv"
    
 
@@ -110,7 +117,7 @@ if not PRIVATE:
     class train_env():
         def __init__(self, randomize=False):
             if VALIDATE:
-                self.df = pd.read_csv(f'/kaggle/input/artofproblemsolving/{VALIDATE}_valid.csv')
+                self.df = pd.read_csv(f'/kaggle/input/artofproblemsolving/{VALIDATE}.csv')
             else:
                 self.df = pd.read_csv('/kaggle/input/ai-mathematical-olympiad-prize/train.csv')
             
@@ -165,13 +172,6 @@ else:
 # # Code processing
 
 # %% jupyter={"outputs_hidden": false}
-def output_line(output, n):
-    lines = output.strip().split('\n')
-    try:
-        return lines[n]
-    except IndexError:
-        return ""
-
 def clean_traceback(output):
     lines = output.strip().split("\n")
     if len(lines) > 20:
@@ -184,7 +184,8 @@ def clean_traceback(output):
         #     line = "    raise"  # Omit
         if line.startswith("Traceback"):
             line = "Traceback"
-        if 'input.py' in line:  #  File ".../input.py", line...
+        # Skip the toplevel function call, since DeepSeek-Math always puts the code in a function
+        if 'input.py' in line and '<module>' not in line:  #  File ".../input.py", line...
             line = re.sub('".*input.py"', '"input.py"', line)
         elif re.match('^\s*File "(.*)"', line):
             # Skip this and the next line
@@ -219,18 +220,19 @@ def process_code(code):
     
     code_status = False
     try:
-        process = subprocess.run(sys.executable + ' input.py', shell = True, timeout = 2, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        process = subprocess.run(sys.executable + ' input.py', shell = True, timeout = 14, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
         shell_output = (process.stdout + process.stderr).decode('utf8')
         #shell_output = subprocess.check_output(batcmd, shell=True).decode('utf8')
         print(f"<<<<<###<Result :\n" + shell_output + ">###>>>>>")
 
         if process.returncode:
-        #if output_line(shell_output, -1) == 'FAIL':
             code_status = False
-            return_value = clean_traceback(shell_output)
-            return_value = output_line(shell_output, -1)  # Last line of exception  ######
-            if "not defined" in return_value:
-                return_value += '\nTry checking the formatting and imports'
+            if TB:
+                return_value = clean_traceback(shell_output)
+            else:
+                return_value = shell_output.strip().split("\n")[-1]  # Last line of exception  ######
+            #if "not defined" in return_value:
+            #    return_value += '\nTry checking the formatting and imports'
         else:
             return_value = shell_output.strip()
             code_status = True
@@ -262,7 +264,7 @@ def process_text_output(result):
     try:
          
         #result_output = re.findall(r'\\boxed\{(-?\d+[.]?\d*(?:e\d+)?)\}', result)
-        result_output = re.findall(r'\\boxed\s*{\s*([^}]+)}', result)
+        result_output = re.findall(r'\\boxed\s*{\s*(\d[^}]*)}', result)
 
         if len(result_output) == 0:
             result_output = naive_parse(result)
@@ -271,7 +273,12 @@ def process_text_output(result):
             #return -1
         else:
             result_output = result_output[-1]
-            print('BOXED', result_output)
+            # There might be some units, like "\boxed{20\%}"
+            if '\\' in result_output and 'frac' not in result_output:
+                result_output = result_output.split("\\")[0]
+                print('CLEANED BOXED', result_output)
+            else:
+                print('BOXED', result_output)
             boxed = True
 
         #print('BOXED FINAL', result_output)
@@ -476,7 +483,7 @@ class StoppingCriteriaSub(transformers.StoppingCriteria):
         return False
 
 # ```->[10897], ````->[4885, 4885], `````->[4885, 10897], ``````->[4885, 4885, 4885]
-stop_words = ["```output", "```python", "```\nOutput" , ")\n```" , "```\n", "````"]
+stop_words = ["```output", "```python", "```\nOutput" , ")\n```" , ")\n\n```" , "```\n", "````"]  # Not "````" as often the model writes a line of ` instead of ```python
 main_stoplist = StoppingCriteriaSub(stop_words)
 error_stoplist = StoppingCriteriaSub([" error", " mistake"])
 
@@ -533,6 +540,15 @@ Write the entire script covering all the steps (use comments and document it wel
            "\nPlease reason step by step, and put your final answer within \\boxed{{}}.",
 "Approach:")
 
+# With tool prompt
+elab0tool = ("elab0tool", """Solve this math problem (the answer is a non-negative integer):
+\"{}\"
+To accomplish this, first determine a sympy-based approach for solving the problem by listing each step to take and what functions need to be called in each step.
+Be clear so even an idiot can follow your instructions, and remember, your final answer should be an integer, not an algebraic expression!
+Write the entire script covering all the steps and using comments and print the result."""
+           "\nPlease integrate natural language reasoning with programs to solve the problem above, and put your final answer within \\boxed{{}}.",
+"Approach:")
+
 elab1 = ("elab1", """Below is a math problem you are to solve (positive numerical answer):
 \"{}\"
 To accomplish this, first determine a sympy-based approach for solving the problem by listing each step to take and what functions need to be called in each step. 
@@ -550,11 +566,27 @@ Analyze this problem and think step by step to come to a solution with programs.
 """After solving the problem, output the final integer answer within \\boxed{{}}.""",
        )
 
+cot2 = ("cot2", """Below is a math problem you are to solve (non-negative integer answer!):
+\"{}\"
+Analyze this problem and think step by step to come to a solution with programs. """
+"""Output the final answer within \\boxed{{}}.""",
+       )
+
 cot1rl = ("cot1rl", """Below is a math problem you are to solve (the answer is a positive integer!):
 \"{}\"
 Analyze this problem and calculate the solution using python."""
 "\nPlease reason step by step, and put your final answer within \\boxed{{}}.",
 "")
+
+tool0 = ("tool0", """{}
+The answer is a non-negative integer.
+\nPlease alternate natural language reasoning with programs to solve the problem above, and put your final answer within \\boxed{{}}.""",
+"")
+
+tool1 = ("tool1", """"{}"
+The answer is a non-negative integer.
+Please integrate natural language reasoning with programs to solve the problem above, and put your final answer within \\boxed{{}}.""",
+"Approach:")
 
 
 
@@ -609,7 +641,8 @@ prompt_options = [elab0, analy1, steps0, stepver1] #, code, code2, cot, steps]  
 # Similar to V9 but missing cot
 prompt_options = [elab0, analy1, steps0]
 
-prompt_options = [elab0rl, cot1rl]
+#prompt_options = [elab0rl, cot1rl]  # USed for a number of submissions
+prompt_options = [steps0, tool1, tool0]  #elab0tool, 
 
 
 # %% [markdown]
@@ -635,6 +668,9 @@ class LLMGenerator:
             self.model_inputs = tokenizer.apply_chat_template(self.messages, add_generation_prompt=True, return_tensors="pt").to(model.device)
         self.tokens = self.model_inputs['input_ids'][0]
         self.input_len = len(self.tokens)
+        self.decode_tokens()
+        
+    def decode_tokens(self):
         self.decoded_output = tokenizer.decode(self.tokens, skip_special_tokens = False)
         self.prompt = self.decoded_output
         self.need_update = False
@@ -741,9 +777,9 @@ if LOGGING:
 
 def predict(probi, problem):
 
-    temperature = 0.96
+    temperature = 0.75
     top_p = 0.95
-    temperature_coding = 0.9
+    temperature_coding = 0.75
     top_p_coding = 0.95
 
     firstprompt = random.randint(0, 9999)
@@ -796,11 +832,19 @@ def predict(probi, problem):
                 logrow.prompt = promptname
             gen.user_prompt(prompt.format(problem), assist)
             gen.generate(temperature, top_p)
+            
+            currently_text = True
 
             while not gen.hit_limit and gen.check_limit() > 3:
                 if gen.tokens[-1] == tokenizer.eos_token_id:
-                    result_info = "eos"
-                    break
+                    if not currently_text:
+                        print("EOS TOKEN ENDS CODE!")
+                        gen.tokens = gen.tokens[:-1]
+                        gen.decode_tokens()
+                        gen.append_prompt("\n```\n")
+                    else:
+                        result_info = "eos"
+                        break
                 if gen.endswith("mistake") or (gen.stop_on_error and gen.endswith("error")):  # mistake also in stop_words
                     print("MISTAKE")
                     bad = True
@@ -810,14 +854,18 @@ def predict(probi, problem):
                     result_info = "no continue"
                     break
 
-                # TODO: have seen ``` instead of ```python
-                if gen.endswith("```python"):
+                # Model sometimes outlines a line of ```` often not ending in 'python'
+                if gen.endswith("```python") or (currently_text and gen.endswith("````") ):
                     temperature_inner = temperature_coding
                     top_p_inner = top_p_coding
                     code_status = True
+                    currently_text = False
+                    if gen.endswith("````"):
+                        gen.append_prompt("python\n")
                 else:
                     temperature_inner = temperature
                     top_p_inner = top_p
+                    currently_text = True
 
                     code_status = False
                     try:
@@ -825,6 +873,7 @@ def predict(probi, problem):
                             print("(((Weird ``````output)))")
                             code_text = gen.decoded_output.split('```python')[-1].split("``````")[0]
                         else:
+                            # The code block may end in ```` (or maybe more, but at which point stop should be triggered), that's OK
                             code_text = gen.decoded_output.split('```python')[-1].split("```")[0]
 
                         if OLDCODE:
@@ -981,10 +1030,10 @@ def predict(probi, problem):
                 if 'no' in confident:
                     score -= 0.1
                     
-            if gen.num_gen_tokens > 1200:
-                score -= 0.2
-            elif gen.num_gen_tokens > 950:
-                score -= 0.1
+            #if gen.num_gen_tokens > 1200:
+            #    score -= 0.2
+            #elif gen.num_gen_tokens > 950:
+            #    score -= 0.1
             if 1 <= code_blocks <= 3:
                 score += 0.15
             score -= penalty
@@ -1013,6 +1062,8 @@ def predict(probi, problem):
             result_output = result_output % 1000
             outputs.append((result_output, score, result_info))
             answer_scores[result_output] += max(0, score)
+            
+            
 
         if len(outputs) > 0:
             answers = [(score,ans) for (ans,score) in answer_scores.items()]
@@ -1027,12 +1078,12 @@ def predict(probi, problem):
     print("\nAll outputs:", outputs)
     return best
 
-
 # %% jupyter={"outputs_hidden": false}
 env = make_env()
 iter_test = env.iter_test()
 
-NOTEBOOK_START_TIME = time.time()
+if not PRIVATE:
+    NOTEBOOK_START_TIME = time.time()
 for probi, (test, sample_submission) in enumerate(iter_test):
     sample_submission['answer'] = predict(probi, test['problem'].values[0])
     #print(f"Making prediction for ""{test[:100]}"": {sample_submission}")
