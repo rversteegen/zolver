@@ -75,10 +75,7 @@ for dset in ("test", "train"):
 
     df.to_csv(OUT_DIR + f"/MATH_full_{dset}.csv")
 
-    # Output a subset at each level (Not used)
-    for level in (1,2,3,4,5):
-        picks = []
-        atlevel = df[df['level'] == level]
-        for subj in subjects:
-            ofsubj = atlevel.index[atlevel['subject'] == subj]
-            picks += list(ofsubj[:20])
+    if dset == "train":
+        for level in (3,4,5):
+            subdf = df[(df.subject == 'algebra') & (df.level == level)]
+            subdf.to_csv(OUTDIR + f"/MATH_algebra{level}_{dest}.csv")
