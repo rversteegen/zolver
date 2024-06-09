@@ -1,11 +1,27 @@
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:27:48.222276Z","iopub.execute_input":"2024-05-27T15:27:48.222637Z","iopub.status.idle":"2024-05-27T15:27:48.226911Z","shell.execute_reply.started":"2024-05-27T15:27:48.222606Z","shell.execute_reply":"2024-05-27T15:27:48.225965Z"}}
+# ---
+# jupyter:
+#   jupytext:
+#     cell_metadata_filter: -_cell_guid,-_uuid,-papermill
+#     comment_magics: false
+#     text_representation:
+#       extension: .py
+#       format_name: percent
+#       format_version: '1.3'
+#       jupytext_version: 1.16.2
+#   kernelspec:
+#     display_name: Python 3
+#     language: python
+#     name: python3
+# ---
+
+# %% jupyter={"outputs_hidden": false}
 # credits:
 # https://www.kaggle.com/code/abdurrafae/improved-code-interpretation
 # https://www.kaggle.com/code/dnyaneshwalwadkar/submission-with-the-best-nb-new-api
 # https://www.kaggle.com/code/utsavsinghal2604/natural-language-and-code-integration
 # Forked from https://www.kaggle.com/code/anrenk/aimo-llm-usage-clean-code
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:27:48.237747Z","iopub.execute_input":"2024-05-27T15:27:48.238423Z","iopub.status.idle":"2024-05-27T15:27:48.242640Z","shell.execute_reply.started":"2024-05-27T15:27:48.238398Z","shell.execute_reply":"2024-05-27T15:27:48.241767Z"}}
+# %% jupyter={"outputs_hidden": false}
 import time
 
 NOTEBOOK_START_TIME = time.time()
@@ -14,7 +30,7 @@ print(NOTEBOOK_START_TIME)
 # %% [markdown]
 # # Libraries installation
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:27:48.247783Z","iopub.execute_input":"2024-05-27T15:27:48.248075Z","iopub.status.idle":"2024-05-27T15:27:48.255058Z","shell.execute_reply.started":"2024-05-27T15:27:48.248052Z","shell.execute_reply":"2024-05-27T15:27:48.253995Z"}}
+# %% jupyter={"outputs_hidden": false}
 %%time
 try:
     import accelerate
@@ -22,7 +38,7 @@ except:
     !pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
     !pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:27:48.256542Z","iopub.execute_input":"2024-05-27T15:27:48.256891Z","iopub.status.idle":"2024-05-27T15:27:48.262747Z","shell.execute_reply.started":"2024-05-27T15:27:48.256863Z","shell.execute_reply":"2024-05-27T15:27:48.261862Z"}}
+# %% jupyter={"outputs_hidden": false}
 import os
 import numpy as np
 import pandas as pd
@@ -39,7 +55,7 @@ import torch
 import transformers
 import accelerate
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:34:33.891975Z","iopub.execute_input":"2024-05-27T15:34:33.892642Z","iopub.status.idle":"2024-05-27T15:34:33.899935Z","shell.execute_reply.started":"2024-05-27T15:34:33.892610Z","shell.execute_reply":"2024-05-27T15:34:33.898990Z"}}
+# %% jupyter={"outputs_hidden": false}
 if os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
     PRIVATE = True
 else:
@@ -66,7 +82,7 @@ else:
     
 print(P100, DEVICE)
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:27:48.289769Z","iopub.execute_input":"2024-05-27T15:27:48.290048Z","iopub.status.idle":"2024-05-27T15:27:48.300538Z","shell.execute_reply.started":"2024-05-27T15:27:48.290026Z","shell.execute_reply":"2024-05-27T15:27:48.299682Z"}}
+# %% jupyter={"outputs_hidden": false}
 if not PRIVATE:
     class train_env():
         def __init__(self, randomize=False):
@@ -111,10 +127,11 @@ else:
     make_env = aimo.make_env
     #env = aimo.make_env()
 
+
 # %% [markdown]
 # # Important Custom Functions
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:27:48.345923Z","iopub.execute_input":"2024-05-27T15:27:48.346192Z","iopub.status.idle":"2024-05-27T15:27:48.365471Z","shell.execute_reply.started":"2024-05-27T15:27:48.346169Z","shell.execute_reply":"2024-05-27T15:27:48.364548Z"}}
+# %% jupyter={"outputs_hidden": false}
 def output_line(output, n):
     lines = output.strip().split('\n')
     try:
@@ -235,10 +252,11 @@ def cpu_time() -> str:
     processt = time.clock_gettime(time.CLOCK_PROCESS_CPUTIME_ID)
     return f"{threadt:.1f}/{processt:.1f}s CPU"
 
+
 # %% [markdown]
 # # Start of code
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:27:48.372044Z","iopub.execute_input":"2024-05-27T15:27:48.372319Z","iopub.status.idle":"2024-05-27T15:27:54.828131Z","shell.execute_reply.started":"2024-05-27T15:27:48.372296Z","shell.execute_reply":"2024-05-27T15:27:54.827234Z"}}
+# %% jupyter={"outputs_hidden": false}
 transformers.set_seed(SEED)
 
 model_kwargs = {}
@@ -314,7 +332,8 @@ def gpu_mem():
         
 show_mem()
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:27:54.829544Z","iopub.execute_input":"2024-05-27T15:27:54.829832Z","iopub.status.idle":"2024-05-27T15:27:54.839184Z","shell.execute_reply.started":"2024-05-27T15:27:54.829808Z","shell.execute_reply":"2024-05-27T15:27:54.838320Z"}}
+
+# %% jupyter={"outputs_hidden": false}
 class StoppingCriteriaSub(transformers.StoppingCriteria):
     def __init__(self, stops = [], encounters=1):
         super().__init__()
@@ -332,11 +351,11 @@ stop_words_ids = [tokenizer(stop_word, return_tensors='pt', add_special_tokens=F
 stopping_criteria = transformers.StoppingCriteriaList([StoppingCriteriaSub(stops=stop_words_ids)])
 
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:27:54.840250Z","iopub.execute_input":"2024-05-27T15:27:54.840508Z","iopub.status.idle":"2024-05-27T15:27:55.089111Z","shell.execute_reply.started":"2024-05-27T15:27:54.840487Z","shell.execute_reply":"2024-05-27T15:27:55.088059Z"}}
+# %% jupyter={"outputs_hidden": false}
 torch.cuda.empty_cache()
 gc.collect()
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T16:07:53.011271Z","iopub.execute_input":"2024-05-27T16:07:53.011644Z","iopub.status.idle":"2024-05-27T16:07:53.020313Z","shell.execute_reply.started":"2024-05-27T16:07:53.011615Z","shell.execute_reply":"2024-05-27T16:07:53.019365Z"}}
+# %% jupyter={"outputs_hidden": false}
 code = ("""Dear professor, consider this math problem:
 \"{}\"
 To accomplish this, first determine a sympy-based approach for solving the problem by listing each step to take and what functions need to be called in each step. Be clear so even an idiot can follow your instructions. Your final answer should be non-negative integer, not an algebraic expression!
@@ -395,7 +414,8 @@ Write a python program to solve it. If it doesn't work, don't try the same thing
 
 prompt_options = [code, cot2] #, cot2]
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:51:41.000188Z","iopub.execute_input":"2024-05-27T15:51:41.000532Z","iopub.status.idle":"2024-05-27T15:51:41.040326Z","shell.execute_reply.started":"2024-05-27T15:51:41.000506Z","shell.execute_reply":"2024-05-27T15:51:41.039448Z"}}
+
+# %% jupyter={"outputs_hidden": false}
 
 class LLMGenerator:
     def __init__(self):
@@ -677,7 +697,8 @@ def predict(probi, problem):
     print("\nAll outputs:", outputs)
     return best
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T15:51:42.853632Z","iopub.execute_input":"2024-05-27T15:51:42.854247Z","iopub.status.idle":"2024-05-27T15:57:18.953344Z","shell.execute_reply.started":"2024-05-27T15:51:42.854215Z","shell.execute_reply":"2024-05-27T15:57:18.952333Z"}}
+
+# %% jupyter={"outputs_hidden": false}
 env = make_env()
 iter_test = env.iter_test()
 
@@ -687,10 +708,10 @@ for probi, (test, sample_submission) in enumerate(iter_test):
     #print(f"Making prediction for ""{test[:100]}"": {sample_submission}")
     env.predict(sample_submission)
 
-# %% [code] {"jupyter":{"outputs_hidden":false},"execution":{"iopub.status.busy":"2024-05-27T16:00:06.198256Z","iopub.execute_input":"2024-05-27T16:00:06.199420Z","iopub.status.idle":"2024-05-27T16:00:06.207050Z","shell.execute_reply.started":"2024-05-27T16:00:06.199384Z","shell.execute_reply":"2024-05-27T16:00:06.206059Z"}}
+# %% jupyter={"outputs_hidden": false}
 if not PRIVATE:
     print(env.df)
     score = (env.df.ground_truth == env.df.answer).sum()
     print(f'{score} matches in {len(env.df)} examples')
 
-# %% [code] {"jupyter":{"outputs_hidden":false}}
+# %% jupyter={"outputs_hidden": false}
