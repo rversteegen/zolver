@@ -45,7 +45,7 @@ else:
 
 SLOW = True # = PRIVATE
 LOGGING = not PRIVATE
-VALIDATE = "AMC_12_valid"
+VALIDATE, DSET_TAG = "AMC_12_valid", "AMC12V"
 
 if PRIVATE:
     SLOW = True
@@ -62,10 +62,10 @@ LLEMMA = False   # LLEMMA tokenizer
 RELOAD_MODEL = False   # For interactive run-all
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 N_REPETITIONS = 3 if VALIDATE else (20 if SLOW else 1)   # 6
-MAX_SINGLE_GEN_TOKENS = 2048 #1500
+MAX_SINGLE_GEN_TOKENS = 1200 #1500
 MAX_GEN_TOKENS = 2048 if SLOW else 500  #CHANGE
 #MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
-MAX_TOKENS = 2200
+MAX_TOKENS = 2048
 
 FIRSTPROB = 0  # ignored for PRIVATE
 
@@ -79,7 +79,7 @@ else:
     NPROBS = 1  #10
     TIME_LIMIT = 450
     
-LOG_TAG = f"{NPROBS}ofAMC12V_Q{QUANT if QUANT else 'off'}_{MAX_GEN_TOKENS}-{MAX_SINGLE_GEN_TOKENS}tok_{'P100' if P100 else '2xT4'}{'' if USE_PAST_KEY else '_noKV'}{'' if TB else '_noTB'}{'_didprove' if ASK_CONFIDENCE else ''}"
+LOG_TAG = f"{NPROBS}of{DSET_TAG}_Q{QUANT if QUANT else 'off'}_{MAX_GEN_TOKENS}-{MAX_SINGLE_GEN_TOKENS}tok_{'P100' if P100 else '2xT4'}{'' if USE_PAST_KEY else '_noKV'}{'' if TB else '_noTB'}{'_didprove' if ASK_CONFIDENCE else ''}"
 LOG_NAME = time.strftime("%Y%m%d-%H%M-") + LOG_TAG + ".csv"
    
 
@@ -168,6 +168,10 @@ else:
 
 # %%
 def clean_traceback(output):
+    if "During handling of the above exception" in output:
+        # Only show first exception.
+        output = output.split("During handling")[0]
+    
     lines = output.strip().split("\n")
     if len(lines) > 20:
         lines = lines[:10] + lines[-10:]
@@ -198,12 +202,13 @@ def process_code(code):
     
     def repl(match):
         #print("repl run on match:", match.group())
-        if "real" not in match.group():
+        text = match.group()
+        if "real" not in text and "imaginary" not in text and "complex" not in text:
             #print("...adding real=True!")
-            return "{}{}".format(match.group()[:-1], ', real=True)')
+            return text[:-1] + ', real=True)'
         else:
-            return "{}{}".format(match.group()[:-1], ')')
-    code = "from sympy import *\n" + code
+            return text
+    code = "import math, fractions, sympy\nfrom sympy import *\n" + code
     code = re.sub(r"symbols\([^)]+\)", repl, code)
     # Add a try...except block
     #code = code.replace('\n', '\n    ')
@@ -215,10 +220,11 @@ def process_code(code):
     
     code_status = False
     try:
+        startt = time.time()
         process = subprocess.run(sys.executable + ' input.py', shell = True, timeout = 14, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
         shell_output = (process.stdout + process.stderr).decode('utf8')
         #shell_output = subprocess.check_output(batcmd, shell=True).decode('utf8')
-        print(f"<<<<<###<Result :\n" + shell_output + ">###>>>>>")
+        print(f"<<<<<###<Result ({time.time() - startt :.1f}s):\n" + shell_output + ">###>>>>>")
 
         if process.returncode:
             code_status = False
@@ -296,7 +302,7 @@ def process_text_output(result):
 # %% [markdown]
 # # OLD Code process
 
-# %% _kg_hide-input=true
+# %% _kg_hide-input=true jupyter={"source_hidden": true}
 #####################################
 
 if OLDCODE:
@@ -446,6 +452,7 @@ if not 'model' in globals() or RELOAD_MODEL:
     model = transformers.AutoModelForCausalLM.from_pretrained(
         MODEL_PATH,
         torch_dtype="auto",
+        #use_flash_attention_2=True,
         trust_remote_code=True,
         config=config,
         **model_kwargs
@@ -464,25 +471,6 @@ show_gpu_mem()
 
 
 # %%
-class StoppingCriteriaSub(transformers.StoppingCriteria):
-    def __init__(self, stops = []):
-        super().__init__()
-        stoplists = [tokenizer(stop_word, return_tensors='pt', add_special_tokens=False)['input_ids'][0] for stop_word in stops]
-        self.stops = [stop.to("cuda") for stop in stoplists]
-        self.ignore_count = 0
-        #self.seen = 
-
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
-        for stop in self.stops:
-            suffix = input_ids[0][-len(stop):]
-            if torch.all(torch.eq(stop, suffix)):
-                if self.ignore_count <= 0:
-                    return True
-                print("  !ignoring stop!")
-                self.ignore_count -= 1
-        return False
-    
-    
 def llemma_tok_line(line):
     "Removes the leading newline"
     print(repr(line))
@@ -497,9 +485,10 @@ def llemma_tok_line(line):
     return torch.tensor(toks[start:])
 
 class StoppingCriteriaSub(transformers.StoppingCriteria):
-    def __init__(self, stops = [], llemma = LLEMMA):
+    def __init__(self, stops = [], allows = [], llemma = LLEMMA):
         super().__init__()
         
+        self.allows = [tokenizer(word, return_tensors='pt', add_special_tokens=False)['input_ids'][0].to(model.device) for word in allows]
         self.stop_words = []
         self.stops = []
         for stop_word in stops:
@@ -519,10 +508,16 @@ class StoppingCriteriaSub(transformers.StoppingCriteria):
             suffix = input_ids[0][-len(stop):]
             if torch.all(torch.eq(stop, suffix)):
                 #print("found", repr(self.stop_words[i]), self.ignore_count)
-                if self.ignore_count <= 0:
-                    return True
-                print("  ignoring stop!")
-                self.ignore_count -= 1
+                for j, allow in enumerate(self.allows):
+                    suffix = input_ids[0][-len(allow):]
+                    if torch.all(torch.eq(allow, suffix)):
+                        print("  ignoring allow word!")
+                        break
+                else:
+                    if self.ignore_count <= 0:
+                        return True
+                    print("  ignoring stop!")
+                    self.ignore_count -= 1
         return False
     
 BEFORE_DOCSTRING = "():\n   "  # 3 spaces! A 4th space is part of the next token!
@@ -530,7 +525,7 @@ BEFORE_DOCSTRING = "():\n   "  # 3 spaces! A 4th space is part of the next token
 # ```->[10897], ````->[4885, 4885], `````->[4885, 10897], ``````->[4885, 4885, 4885]
 stop_words = ["```output", "```python", "```\nOutput" , ")\n```" , ")\n\n```" , "```\n", "````"] #, BEFORE_DOCSTRING]
 main_stoplist = StoppingCriteriaSub(stop_words)
-error_stoplist = StoppingCriteriaSub([" error", " mistake"])
+error_stoplist = StoppingCriteriaSub([" error", " mistake"], [" trial and error"])
 
 stopping_criteria = transformers.StoppingCriteriaList([main_stoplist])
 error_stopping_criteria = transformers.StoppingCriteriaList([main_stoplist, error_stoplist])
@@ -665,6 +660,12 @@ Think step by step writing python code to solve this problem. Get to the point. 
 If it doesn't work and you can't fix it then stop. Put your final answer within \\boxed{{}}. It must be a positive integer.""",
 "\n"        )  # Hopefully stops it producing pythogn without ````python
 
+steps1 = ("concise-steps1",  """\"{}\"
+
+Think step by step writing python code to solve this problem. The answer is a non-negative integer. Get to the point. Maths only, no chatting with me. Write out the whole program and print the result.
+Don't repeat yourself: if you keep making the same mistake then stop. Put your final answer within \\boxed{{}}.""",
+"\n"        )  # Hopefully stops it producing pythogn without ````python
+
 stepver1 = ("con-step-ver1",  """\"{}\"
 
 Think step by step analyzing and writing python code to solve this problem. Get to the point. Maths only, no chatting with me. Write out the whole program and print the result. No docstrings.
@@ -681,13 +682,16 @@ Verify your answer is correct, with some test code if you can. If it is correct 
 "Approach:\n")
 
 
+
 prompt_options = [elab0, analy1, steps0, stepver1] #, code, code2, cot, steps]  # cot2
 # Similar to V9 but missing cot
 prompt_options = [elab0, analy1, steps0]
 
 #prompt_options = [elab0rl, cot1rl]  # USed for a number of submissions
-prompt_options = [steps0, tool0, tool1]  # Scored 22
-#prompt_options = [tool0, tool1, elab0tool]
+#prompt_options = [steps0, tool0, tool1]  # Scored 22
+prompt_options = [steps1, tool0, tool1] 
+prompt_options = [elab0tool, tool0, tool1]
+
 
 # %% [markdown]
 # # Generation and main loop
@@ -712,7 +716,7 @@ class LLMGenerator:
         else:
             self.model_inputs = tokenizer.apply_chat_template(self.messages, add_generation_prompt=True, return_tensors="pt").to(model.device)
         self.tokens = self.model_inputs['input_ids'][0]
-        self.decode_tokens()  # Puts the 
+        #self.decode_tokens()
         
     def decode_tokens(self):
         self.prompt = tokenizer.decode(self.tokens, skip_special_tokens = False)
@@ -766,14 +770,7 @@ class LLMGenerator:
         if max_toks < 3:
             print("SKIP GENERATE DUE TO LIMIT")
             return
-       
-        #rint("INPUT;", self.model_inputs['input_ids'].shape)
-        #f self.past_key_values:
-        #   print("PAST: len ", len(self.past_key_values[0][0]))
-        
-        #input_prompt = tokenizer.decode( self.model_inputs['input_ids'][0], skip_special_tokens = False)
-        #print("$$<<<$$ ENTIRE PROMPT\n" + input_prompt + "\n$$>>>$$")
-        #self.update_inputs()
+
         #if self.need_update:
         #    self.update_inputs()  # Regenerate model_input
         if self.stop_on_error:
@@ -789,6 +786,7 @@ class LLMGenerator:
                                            temperature = temperature,
                                            top_p = top_p,
                                            bad_words_ids = self.bad_words,
+                                           #no_repeat_ngram_size = 50,
                                            pad_token_id = tokenizer.eos_token_id,
                                            num_return_sequences = 1,
                                            stopping_criteria = stopper)
@@ -796,18 +794,14 @@ class LLMGenerator:
         if USE_PAST_KEY:
             sequences = generation_output.sequences
             self.past_key_values = generation_output.past_key_values
-            
         else:
             sequences = generation_output
-        #print("out len toks = ", len(self.tokens))
         self.tokens = sequences[0]
         decoded_output = tokenizer.decode(self.tokens, skip_special_tokens = False)
         self.new_output = decoded_output[len(self.prompt):]
         self.prompt = decoded_output
         self.need_update = True
         self.model_inputs = {'input_ids': sequences}
-        #self.update_inputs()
-        #print("out prompt len = ", len(self.prompt))
         #self.new_output = tokenizer.decode(gen.tokens[input_len:], skip_special_tokens=True)
 
         runt = time.time() - startt
@@ -889,7 +883,7 @@ def predict(probi, problem):
         
         try:
             gen = LLMGenerator()
-            gen.set_bad_words([' """'])
+            gen.set_bad_words([' """', " '''", '():\n    r'])  # disallow  r""" too
 
             promptname, prompt, assist = prompt_options[(firstprompt+jj) % len(prompt_options)]  #random.choice(prompt_options)
             print("prompt", promptname)
@@ -899,8 +893,11 @@ def predict(probi, problem):
             gen.generate(temperature, top_p)
             
             currently_text = True
+            temperature_inner = temperature
+            top_p_inner = top_p
 
             while not gen.hit_limit and gen.check_limit() > 3:
+                continue_block = False
                 
                 if re.search("Assistant: (from|import) ", gen.prompt):   #gen.new_output.startswith(" from "):
                     # ``` is missing
@@ -921,24 +918,31 @@ def predict(probi, problem):
                         break
                 elif gen.endswith("mistake") or (gen.stop_on_error and gen.endswith("error")):  # mistake also in stop_words
                     # This only happens after error_stoplist.ignore_count repetitions
-                    print("MISTAKE")
-                    bad = True
-                    break
+                    if False: ##gen.endswith("trial and error"):
+                        print("...IGNORE ERROR")
+                        error_stoplist.ignore_count += 1
+                        continue_block = True
+                    else:
+                        print("MISTAKE")
+                        bad = True
+                        break
                     
                 elif not any(gen.endswith(stop_word) for stop_word in main_stoplist.stop_words):
                     # No continuation, and didn't hit limit, so must have ended due to eos.
+                    # This should never happen!
                     result_info = "no continue"
                     print("nocont", repr(gen.prompt[-10:]))
                     break
 
 
-                    
                 if gen.endswith(BEFORE_DOCSTRING):
                     # Oh you think you're going to copy the problem into the docstring, do you? No!!!
                     gen.append_prompt(" #")
-                    temperature_inner = temperature_coding
-                    top_p_inner = top_p_coding
+                    continue_block = True
 
+
+                if continue_block:
+                    pass
                 # Model sometimes outputs a line of ```` often not ending in 'python'
                 elif gen.endswith("```python") or (currently_text and gen.endswith("````") ):
                     # Starting code
@@ -1057,7 +1061,9 @@ def predict(probi, problem):
                     # else:
                     #     pass #cumulative_code = ""
 
-                if code_status == False:
+                if continue_block:
+                    pass
+                elif code_status == False:
                     error_stoplist.ignore_count += 1
                     #gen.stop_on_error = False   # Don't stop on "error", the LLM may say "to fix the error"
                 else:
@@ -1151,18 +1157,21 @@ def predict(probi, problem):
             result_output = result_output % 1000
             outputs.append((result_output, score, result_info))
             answer_scores[result_output] += max(0, score)
-            
-            
 
         if len(outputs) > 0:
             answers = [(score,ans) for (ans,score) in answer_scores.items()]
             answers.sort(reverse = True)
             print("SCORES,ANSWERS:", answers)
             best_score, best = answers[0]
+            if len(answers) >= 2:
+                score_gap = best_score - answers[1][0]
+            else:
+                score_gap = best_score
             #if best_score >= 3 and best_score >= 1 + (jj+1)/2:
-            if best_score > 4 and not VALIDATE:
-                print("ANSWER FOUND!")
-                break   # ####FIXME
+            #if best_score > 4 and not VALIDATE:
+            if (score_gap >= 2.4 or best_score >= 4) and not VALIDATE:
+                print("EARLY FINISH!")
+                break
 
     print("\nAll outputs:", outputs)
     return best
