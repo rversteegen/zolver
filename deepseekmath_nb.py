@@ -712,7 +712,7 @@ class LLMGenerator:
         else:
             self.model_inputs = tokenizer.apply_chat_template(self.messages, add_generation_prompt=True, return_tensors="pt").to(model.device)
         self.tokens = self.model_inputs['input_ids'][0]
-        #self.decode_tokens()  # Puts the 
+        self.decode_tokens()  # Puts the 
         
     def decode_tokens(self):
         self.prompt = tokenizer.decode(self.tokens, skip_special_tokens = False)
@@ -736,7 +736,7 @@ class LLMGenerator:
             if assist_prefix:
                 self.messages.append({"role": "assistant", "content": assist_prefix})
         self.update_inputs()
-        print(f"<<<<<PROMPT {len(self.tokens) - old_input} tokens\n" + self.prompt[ol:] + ">>>>>")
+        print(f"<<<<<PROMPT {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + self.prompt[ol:] + ">>>>>")
 
     def append_prompt(self, text):
         "Append to prompt, without changing the role."
@@ -744,7 +744,7 @@ class LLMGenerator:
         self.prompt += text
         old_input = len(self.tokens)
         self.update_inputs()
-        print(f"<<<<<APPEND {len(self.tokens) - old_input} tokens\n" + text + ">>>>>")
+        print(f"<<<<<APPEND {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + text + ">>>>>")
         
     def replace_tokens(self, new_tokens):
         self.tokens = new_tokens
@@ -773,7 +773,7 @@ class LLMGenerator:
         
         #input_prompt = tokenizer.decode( self.model_inputs['input_ids'][0], skip_special_tokens = False)
         #print("$$<<<$$ ENTIRE PROMPT\n" + input_prompt + "\n$$>>>$$")
-        
+        #self.update_inputs()
         #if self.need_update:
         #    self.update_inputs()  # Regenerate model_input
         if self.stop_on_error:
@@ -783,7 +783,6 @@ class LLMGenerator:
         input_len = len(self.tokens)
         generation_output = model.generate(**self.model_inputs, 
                                            max_new_tokens = min(limit, max_toks),
-                                           use_cache = USE_PAST_KEY,
                                            return_dict_in_generate = USE_PAST_KEY,
                                            past_key_values = self.past_key_values,
                                            do_sample = True,
@@ -802,11 +801,12 @@ class LLMGenerator:
             sequences = generation_output
         #print("out len toks = ", len(self.tokens))
         self.tokens = sequences[0]
-        decoded_output = tokenizer.decode(self.tokens, skip_special_tokens = False) #True)
+        decoded_output = tokenizer.decode(self.tokens, skip_special_tokens = False)
         self.new_output = decoded_output[len(self.prompt):]
         self.prompt = decoded_output
         self.need_update = True
         self.model_inputs = {'input_ids': sequences}
+        #self.update_inputs()
         #print("out prompt len = ", len(self.prompt))
         #self.new_output = tokenizer.decode(gen.tokens[input_len:], skip_special_tokens=True)
 
@@ -1127,8 +1127,8 @@ def predict(probi, problem):
                 score += 0.15
             score -= penalty
                     
-        except torch.cuda.OutOfMemoryError as e:
-        #except Exception as e:
+        #except torch.cuda.OutOfMemoryError as e:
+        except Exception as e:
             print("predict() EXCEPTION")
             print(e)
             #result_output = -1
@@ -1167,7 +1167,9 @@ def predict(probi, problem):
     print("\nAll outputs:", outputs)
     return best
 
-# %%
+
+######################################################
+
 env = make_env()
 iter_test = env.iter_test()
 
