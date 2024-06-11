@@ -55,19 +55,19 @@ TB = True # Show traceback, OLDCODE=False only
 ASK_CONFIDENCE = False  # "Is it proven?"
 P100 = (torch.cuda.device_count() == 1)
 QUANT = False
-USE_PAST_KEY = False
+USE_PAST_KEY = True#False
 SEED = 314
 MODEL_PATH = "/kaggle/input/deepseek-math"
 LLEMMA = False   # LLEMMA tokenizer
 RELOAD_MODEL = False   # For interactive run-all
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-N_REPETITIONS = 3 if VALIDATE else (20 if SLOW else 1)   # 6
-MAX_SINGLE_GEN_TOKENS = 1200 #1500
+N_REPETITIONS = 2 if VALIDATE else (20 if SLOW else 1)   # 6
+MAX_SINGLE_GEN_TOKENS = 1500
 MAX_GEN_TOKENS = 2048 if SLOW else 500  #CHANGE
 #MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
 MAX_TOKENS = 2048
 
-FIRSTPROB = 0  # ignored for PRIVATE
+FIRSTPROB = 3  # ignored for PRIVATE
 
 if PRIVATE:
     NPROBS = 50
@@ -207,7 +207,7 @@ def process_code(code):
             #print("...adding real=True!")
             return text[:-1] + ', real=True)'
         else:
-            return text
+            return text[:-1] + ', finite=True)'
     code = "import math, fractions, sympy\nfrom sympy import *\n" + code
     code = re.sub(r"symbols\([^)]+\)", repl, code)
     # Add a try...except block
@@ -366,7 +366,7 @@ if OLDCODE:
 # %% [markdown]
 # # Util
 
-# %%
+# %% jupyter={"source_hidden": true}
 def show_gpu_mem():
     for i in range(torch.cuda.device_count()):
         alloc = torch.cuda.memory_allocated(i)
@@ -403,7 +403,7 @@ def show_model_mem(m):
 # %% [markdown]
 # # Load model
 
-# %%
+# %% jupyter={"source_hidden": true}
 %%time
 transformers.set_seed(SEED)
 
@@ -691,6 +691,7 @@ prompt_options = [elab0, analy1, steps0]
 #prompt_options = [steps0, tool0, tool1]  # Scored 22
 prompt_options = [steps1, tool0, tool1] 
 prompt_options = [elab0tool, tool0, tool1]
+prompt_options = [elab0tool, tool0, steps1]
 
 
 # %% [markdown]
@@ -1097,7 +1098,10 @@ def predict(probi, problem):
                     gen.user_prompt("If you know the answer put it in \\boxed{}")
                     gen.generate(0.2, top_p)
                     result_output, boxed = process_text_output(gen.prompt)
-                if ASK_CONFIDENCE and penalty == 0 and boxed and gen.check_limit() > 23:
+                if False and gen.check_limit() > 50:
+                    gen.user_prompt("Which step of the above solution are you least sure about? And how uncertain is it on a scale from 1 (safe) to 10 (unsound)?")
+                    gen.generate(0.8, top_p, 400)
+                elif ASK_CONFIDENCE and penalty == 0 and boxed and gen.check_limit() > 23:
                     gen.user_prompt(ASK_CONFIDENCE)
                     gen.generate(0.2, top_p, 3)
                     confident = gen.new_output.lower()
@@ -1169,7 +1173,7 @@ def predict(probi, problem):
                 score_gap = best_score
             #if best_score >= 3 and best_score >= 1 + (jj+1)/2:
             #if best_score > 4 and not VALIDATE:
-            if (score_gap >= 2.4 or best_score >= 4) and not VALIDATE:
+            if (score_gap >= 2.4 or best_score >= 5) and not VALIDATE:
                 print("EARLY FINISH!")
                 break
 
@@ -1185,6 +1189,7 @@ iter_test = env.iter_test()
 if not PRIVATE:
     NOTEBOOK_START_TIME = time.time()
 for probi, (test, sample_submission) in enumerate(iter_test):
+    transformers.set_seed(SEED)
     sample_submission['answer'] = predict(probi, test['problem'].values[0])
     #print(f"Making prediction for ""{test[:100]}"": {sample_submission}")
     env.predict(sample_submission)
