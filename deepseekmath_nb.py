@@ -55,26 +55,26 @@ TB = True # Show traceback, OLDCODE=False only
 ASK_CONFIDENCE = False  # "Is it proven?"
 P100 = (torch.cuda.device_count() == 1)
 QUANT = False
-USE_PAST_KEY = True#False
+USE_PAST_KEY = False
 SEED = 314
 MODEL_PATH = "/kaggle/input/deepseek-math"
 LLEMMA = False   # LLEMMA tokenizer
 RELOAD_MODEL = False   # For interactive run-all
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-N_REPETITIONS = 2 if VALIDATE else (20 if SLOW else 1)   # 6
+N_REPETITIONS = 10 if VALIDATE else (20 if SLOW else 1)   # 6
 MAX_SINGLE_GEN_TOKENS = 1500
 MAX_GEN_TOKENS = 2048 if SLOW else 500  #CHANGE
 #MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
 MAX_TOKENS = 2048
 
-FIRSTPROB = 3  # ignored for PRIVATE
+FIRSTPROB = 0  # ignored for PRIVATE
 
 if PRIVATE:
     NPROBS = 50
     TIME_LIMIT = 31000
 elif VALIDATE:
-    NPROBS = 30 #100
-    TIME_LIMIT = 5000
+    NPROBS = 50 #100
+    TIME_LIMIT = 10000
 else:
     NPROBS = 1  #10
     TIME_LIMIT = 450
@@ -169,8 +169,8 @@ else:
 # %%
 def clean_traceback(output):
     if "During handling of the above exception" in output:
-        # Only show first exception.
-        output = output.split("During handling")[0]
+        # Only show last exception, which is the user-interpretable error message sympy gives
+        output = output.split("During handling")[-1]
     
     lines = output.strip().split("\n")
     if len(lines) > 20:
@@ -248,6 +248,20 @@ def process_code(code):
 
     return return_value, code_status
 
+def shorten_overlong_lines(code_output):
+    lines = []
+    for line in code_output.split("\n"):
+        if len(line) > 140:
+            try:
+                start = line.index(',', 50)
+                end = line.rindex(',', 0, -50)
+                if start < end:
+                    line = line[: start+1] + " ... " + line[end:]
+            except ValueError:
+                pass
+        lines.append(line)
+    return '\n'.join(lines)
+
 
 # %% [markdown]
 # # Text processing
@@ -302,7 +316,7 @@ def process_text_output(result):
 # %% [markdown]
 # # OLD Code process
 
-# %% _kg_hide-input=true jupyter={"source_hidden": true}
+# %% _kg_hide-input=true
 #####################################
 
 if OLDCODE:
@@ -366,7 +380,7 @@ if OLDCODE:
 # %% [markdown]
 # # Util
 
-# %% jupyter={"source_hidden": true}
+# %%
 def show_gpu_mem():
     for i in range(torch.cuda.device_count()):
         alloc = torch.cuda.memory_allocated(i)
@@ -403,7 +417,7 @@ def show_model_mem(m):
 # %% [markdown]
 # # Load model
 
-# %% jupyter={"source_hidden": true}
+# %%
 %%time
 transformers.set_seed(SEED)
 
@@ -503,7 +517,7 @@ class StoppingCriteriaSub(transformers.StoppingCriteria):
             self.stop_words.append(stop_word)
         self.ignore_count = 0
 
-    def __call__(self, input_ids: torch.LongTensor, scores: torch.FloatTensor):
+    def __call__(self, input_ids: torch.LongTensor, _scores):
         for i, stop in enumerate(self.stops):
             suffix = input_ids[0][-len(stop):]
             if torch.all(torch.eq(stop, suffix)):
@@ -520,12 +534,44 @@ class StoppingCriteriaSub(transformers.StoppingCriteria):
                     self.ignore_count -= 1
         return False
     
+class NGramStoppingCriteria(transformers.StoppingCriteria):
+    def __init__(self, ngram_size):
+        super().__init__()
+        self.ngram_size = ngram_size
+        self.reset()
+        
+    def reset(self):
+        self.ngrams = set()
+        self.inside_code = False
+        self.signalled = False
+        self.startlen = 0
+        
+    def __call__(self, input_ids: torch.LongTensor, _scores):
+        assert _scores is None
+        if self.inside_code:
+            return False
+        if len(input_ids[0]) < self.startlen + self.ngram_size:
+            # Too close to the start of this text block, contains part of previous code/output
+            return False
+        suffix = tuple(input_ids[0][-self.ngram_size:].tolist())
+        #if "```" in suffix:
+        if suffix in self.ngrams:
+            self.signalled = True
+            return True
+        self.ngrams.add(suffix)
+        return False
+                
+    
 BEFORE_DOCSTRING = "():\n   "  # 3 spaces! A 4th space is part of the next token!
 
 # ```->[10897], ````->[4885, 4885], `````->[4885, 10897], ``````->[4885, 4885, 4885]
 stop_words = ["```output", "```python", "```\nOutput" , ")\n```" , ")\n\n```" , "```\n", "````"] #, BEFORE_DOCSTRING]
 main_stoplist = StoppingCriteriaSub(stop_words)
 error_stoplist = StoppingCriteriaSub([" error", " mistake"], [" trial and error"])
+ngram_stopper = NGramStoppingCriteria(40)
+
+#stopping_criteria = transformers.StoppingCriteriaList([ngram_stopper, main_stoplist])
+#error_stopping_criteria = transformers.StoppingCriteriaList([ngram_stopper, main_stoplist, error_stoplist])
 
 stopping_criteria = transformers.StoppingCriteriaList([main_stoplist])
 error_stopping_criteria = transformers.StoppingCriteriaList([main_stoplist, error_stoplist])
@@ -537,12 +583,13 @@ error_stopping_criteria = transformers.StoppingCriteriaList([main_stoplist, erro
 # # Prompts
 
 # %% _kg_hide-input=false
+#NOT 3-TUPLE
 code = ("""Dear professor, consider this math problem:
 \"{}\"
 To accomplish this, first determine a sympy-based approach for solving the problem by listing each step to take and what functions need to be called in each step. Be clear so even an idiot can follow your instructions. Your final answer should be non-negative integer, not an algebraic expression!
 Write the entire script covering all the steps (use comments and document it well) and print the result. After solving the problem, output the final numerical answer within \\boxed{}.""",
 "Approach:")
-
+#NOT 3-TUPLE
 code2 = ("""Consider this math problem:
 \"{}\"
 First, logically analyze the implications of the problem statement. Second, list the general steps of a Sympy-based approach to calculate the answer. Third, write out commented Sympy code to compute the numerical answer and print the result.
@@ -550,7 +597,7 @@ You can run and receive results of multiple code blocks to reach the answer in s
 Note that intermediate calculations may be real numbers.
 Finally, output the final integer answer (not an algebraic expression) within \\boxed{{}}.""",)
 
-
+#NOT 3-TUPLE
 cot = ("""Below is a math problem you are to solve:
 \"{}\"
 Analyze this problem and think step by step to come to a solution with programs. After solving the problem, output the final integer answer within \\boxed{{}}.""",)
@@ -561,7 +608,7 @@ prompt_options = [code2, code, cot]
 
 # You can run multiple code blocks to reach the answer in steps.
 
-#similar to 'code' in V9 soln, but several changes
+#similar to 'code' in V9 soln, but several changes inc "run multiple code blocks" (changes were in V11?)
 elab0 = ("elab0", """Below is a math problem you are to solve (positive numerical answer):
 \"{}\"
 To accomplish this, first determine a sympy-based approach for solving the problem by listing each step to take and what functions need to be called in each step. 
@@ -597,19 +644,19 @@ Don't try the same thing repeatedly if it doesn't work.
 Put your final integer answer within \\boxed{{}}.""",
 "Approach:\n")
 
-# cot0 == cot in V9
+# cot0 == cot in V9 and V11
 # cot1 replaces 'numerical' with 'integer'
 cot1 = ("cot1", """Below is a math problem you are to solve (positive integer answer!):
 \"{}\"
 Analyze this problem and think step by step to come to a solution with programs. """
 """After solving the problem, output the final integer answer within \\boxed{{}}.""",
-       )
+   ""    )
 
 cot2 = ("cot2", """Below is a math problem you are to solve (non-negative integer answer!):
 \"{}\"
 Analyze this problem and think step by step to come to a solution with programs. """
 """Output the final answer within \\boxed{{}}.""",
-       )
+ "")
 
 cot1rl = ("cot1rl", """Below is a math problem you are to solve (the answer is a positive integer!):
 \"{}\"
@@ -627,6 +674,19 @@ The answer is a non-negative integer.
 Please integrate natural language reasoning with programs to solve the problem above, and put your final answer within \\boxed{{}}.""",
 "Approach:")
 
+compute0 = ("compute0", """{}
+The answer is a non-negative integer.
+\nFind the solution by computing every step along the way with python/sympy/numpy/scipy/etc. Don't state solutions without either proof or code but don't repeat or restate code outputs.
+Put your final answer within \\boxed{{}}.""",
+"")
+
+# Not as good
+compute1 = ("compute1", """{}
+The answer is a non-negative integer.
+
+Show the solution by computing every step along the way and every algebraic simplification with python/sympy and printing results. Don't jump to conclusions without either proof or code.
+Put your final answer within \\boxed{{}}.""",
+"")
 
 
 cot2 = ("cot2",  """Below is a math problem you are to solve (positive integer answer!):
@@ -641,14 +701,22 @@ cot3 = ("shortpkg0", """Here's a problem, with a positive integer answer!
 Analyze step by step and use python/sympy/numpy/scipy/etc to do any calculations or find solutions. After solving the problem, output the final integer answer within \\boxed{{}}.""",
        "")
 
-# analy0 == code2 in V9
+# analy0 == code2 in V9 and V11
 # analy1 adds "No docstrings."
+# analy2 removes No docstrings and adds non-negative integer, rewords
 analy1 = ("analy1",
     """Consider this math problem:
 \"{}\"
 First, analyze the implications of the problem statement and restate it more mathematically. Write code to check assumptions, to simplify the problem.
 Write out commented Sympy code to compute the numerical answer and print the result. But no docstrings.
 Think step by step to come to a solution with programs. After solving the problem, output the final integer answer within \\boxed{{}}.""",
+        "")
+analy2 = ("analy2",
+    """Consider this math problem:
+\"{}\"
+The answer is a non-negative integer. First, analyze the implications of the problem statement and restate it more mathematically. Write code to check assumptions, to simplify the problem.
+Write out commented Sympy code to compute the numerical answer and print the result.
+Think step by step to come to a solution with programs, and put your final integer answer within \\boxed{{}}.""",
         "")
 
 
@@ -688,10 +756,11 @@ prompt_options = [elab0, analy1, steps0, stepver1] #, code, code2, cot, steps]  
 prompt_options = [elab0, analy1, steps0]
 
 #prompt_options = [elab0rl, cot1rl]  # USed for a number of submissions
-#prompt_options = [steps0, tool0, tool1]  # Scored 22
-prompt_options = [steps1, tool0, tool1] 
-prompt_options = [elab0tool, tool0, tool1]
-prompt_options = [elab0tool, tool0, steps1]
+#prompt_options = [steps0, tool0, tool1]  # 22
+prompt_options = [steps1, tool0, tool1]  # 17
+prompt_options = [elab0tool, tool0, tool1]  # 18
+prompt_options = [elab0tool, tool0, steps1]  # 15, 17, ?19
+prompt_options = [compute0, cot1, tool0, analy2]  #, elab0tool, ]
 
 
 # %% [markdown]
@@ -709,6 +778,7 @@ class LLMGenerator:
         self.need_update = True
         self.stop_on_error = True
         self.bad_words = None
+        ngram_stopper.reset()
 
     def update_inputs(self):
         if True:
@@ -779,6 +849,7 @@ class LLMGenerator:
         else:
             stopper = stopping_criteria
         input_len = len(self.tokens)
+        #print("ngram stop inactive=", ngram_stopper.inside_code)
         generation_output = model.generate(**self.model_inputs, 
                                            max_new_tokens = min(limit, max_toks),
                                            return_dict_in_generate = USE_PAST_KEY,
@@ -906,6 +977,11 @@ def predict(probi, problem):
                     gen.replace_prompt(gen.prompt.replace("Assistant: ", "Assistant: ```python\n"))
                     currently_text = False
                 
+                if ngram_stopper.signalled:
+                    print("NGRAM STOP")
+                    bad = True
+                    break
+                
                 # Process stopwords
                 
                 if gen.tokens[-1] == tokenizer.eos_token_id:
@@ -1015,6 +1091,8 @@ def predict(probi, problem):
                                     last_code_result = round(float(eval(code_output.strip().split("\n")[-1])))
                                 except:
                                     pass
+                                code_output = shorten_overlong_lines(code_output)
+
                             else:
                                 # the last line is the exception
                                 except_line = code_output.strip().split("\n")[-1]
@@ -1051,6 +1129,7 @@ def predict(probi, problem):
                     if not gen.endswith("\n"):
                         out = "\n" + out
                     gen.append_prompt(out)
+                    ngram_stopper.startlen = len(gen.tokens)
 
                     # if code_status:
                     #     #if gen.endswith(")\n```"):
@@ -1069,6 +1148,7 @@ def predict(probi, problem):
                     #gen.stop_on_error = False   # Don't stop on "error", the LLM may say "to fix the error"
                 else:
                     gen.stop_on_error = True
+                ngram_stopper.inside_code = not currently_text
                 gen.generate(temperature_inner, top_p_inner)
 
             boxed = False
@@ -1137,8 +1217,8 @@ def predict(probi, problem):
                 score += 0.15
             score -= penalty
                     
-        #except torch.cuda.OutOfMemoryError as e:
-        except Exception as e:
+        except torch.cuda.OutOfMemoryError as e:
+        #except Exception as e:
             print("predict() EXCEPTION")
             print(e)
             #result_output = -1
@@ -1173,7 +1253,7 @@ def predict(probi, problem):
                 score_gap = best_score
             #if best_score >= 3 and best_score >= 1 + (jj+1)/2:
             #if best_score > 4 and not VALIDATE:
-            if (score_gap >= 2.4 or best_score >= 5) and not VALIDATE:
+            if (score_gap >= 3 or best_score >= 6) and not VALIDATE:
                 print("EARLY FINISH!")
                 break
 
