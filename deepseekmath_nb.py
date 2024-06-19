@@ -32,7 +32,7 @@
 import os
 # Try reduce wasted memory due to small 11MB allocations consuming 20MB blocks
 #os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"  #"max_split_size_mb:256"  #
-#PYTORCH_NO_CUDA_MEMORY_CACHING=1
+#os.environ["PYTORCH_NO_CUDA_MEMORY_CACHING"] = "1"   # Makes things very slow, doesn't help that much
 
 import time
 NOTEBOOK_START_TIME = time.time()
@@ -45,7 +45,8 @@ else:
 
 SLOW = True # = PRIVATE
 LOGGING = not PRIVATE
-VALIDATE, DSET_TAG = "AMC_12_valid", "AMC12V"
+#VALIDATE, DSET_TAG = "AMC_12_valid", "AMC12V"
+VALIDATE, DSET_TAG = "AIME_test24", "AIME24"
 
 if PRIVATE:
     SLOW = True
@@ -54,15 +55,16 @@ OLDCODE = False  # Original code runner
 TB = True # Show traceback, OLDCODE=False only
 ASK_CONFIDENCE = False  # "Is it proven?"
 P100 = (torch.cuda.device_count() == 1)
+SINGLE_GPU = False   # Just 1xT4
 QUANT = False
-USE_PAST_KEY = False
-SEED = 314
+USE_PAST_KEY = True
+SEED = 315
 MODEL_PATH = "/kaggle/input/deepseek-math"
 LLEMMA = False   # LLEMMA tokenizer
 RELOAD_MODEL = False   # For interactive run-all
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-N_REPETITIONS = 10 if VALIDATE else (20 if SLOW else 1)   # 6
-MAX_SINGLE_GEN_TOKENS = 1500
+N_REPETITIONS = 5 if VALIDATE else (20 if SLOW else 1)   # 6
+MAX_SINGLE_GEN_TOKENS = 2048
 MAX_GEN_TOKENS = 2048 if SLOW else 500  #CHANGE
 #MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
 MAX_TOKENS = 2048
@@ -73,17 +75,30 @@ if PRIVATE:
     NPROBS = 50
     TIME_LIMIT = 31000
 elif VALIDATE:
-    NPROBS = 50 #100
-    TIME_LIMIT = 10000
+    NPROBS = 30 #100
+    TIME_LIMIT = 13000
 else:
     NPROBS = 1  #10
     TIME_LIMIT = 450
     
-LOG_TAG = f"{NPROBS}of{DSET_TAG}_Q{QUANT if QUANT else 'off'}_{MAX_GEN_TOKENS}-{MAX_SINGLE_GEN_TOKENS}tok_{'P100' if P100 else '2xT4'}{'' if USE_PAST_KEY else '_noKV'}{'' if TB else '_noTB'}{'_didprove' if ASK_CONFIDENCE else ''}"
+LOG_TAG = ""
+if FIRSTPROB:
+    LOG_TAG += f"{FIRSTPROB}-{FIRSTPROB + NPROBS}"
+else:
+    LOG_TAG += f"{NPROBS}"
+LOG_TAG += f"of{DSET_TAG}_Q{QUANT if QUANT else 'off'}_{MAX_GEN_TOKENS}-{MAX_SINGLE_GEN_TOKENS}tok"
+if P100:
+    LOG_TAG += "_P100"
+elif SINGLE_GPU:
+    LOG_TAG += "_1xT4"
+else:
+    LOG_TAG += "_2xT4"
+LOG_TAG += f"{'' if USE_PAST_KEY else '_noKV'}{'' if TB else '_noTB'}{'_didprove' if ASK_CONFIDENCE else ''}"
 LOG_NAME = time.strftime("%Y%m%d-%H%M-") + LOG_TAG + ".csv"
    
 
 print(f"P100={P100}, DEVICE={DEVICE}, QUANT={QUANT}, SLOW={SLOW}")
+print(LOG_NAME)
 
 
 # %% [markdown]
@@ -99,6 +114,7 @@ if QUANT and not 'installed_libs' in globals():
 
 # %%
 import os
+import psutil
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -282,7 +298,7 @@ def process_text_output(result):
         result_output = re.findall(r'\\boxed\s*{\s*(\d[^}]*)}', result)
 
         if len(result_output) == 0:
-            result_output = re.findall(r'he answer is:?\s*\$*(\d+)', result)
+            result_output = re.findall(r' answer is:?\s*\$*(\d+)', result)  # the answer / the final answer
             if len(result_output) == 0:
                 result_output = naive_parse(result)
                 print('NAIVE', result_output)
@@ -389,13 +405,23 @@ def show_gpu_mem():
         print(f"CUDA dev {i}: free={free/2**30 :.2f} used={alloc/2**30 :.2f} + reserved={(reserved - alloc)/2**30:.2f} / {total/2**30:.1f} GB")
         
 def gpu_mem():
+    if PRIVATE:
+        return ""
     ret = ""
     for i in range(torch.cuda.device_count()):
         reserved = torch.cuda.memory_reserved(i)
-        ret += f"(cuda{i}: {reserved/2**30 :.2f}GB) "
+        use = torch.cuda.memory_usage(i)
+        ret += f"(cuda{i}: {reserved/2**30 :.2f}GB,{use}%) "
+    for i in range(torch.cuda.device_count()):
+        temp = torch.cuda.temperature(i)
+        use = torch.cuda.memory_usage(i)
+        MHz = torch.cuda.clock_rate(i)
+        ret += f"(cuda{i}: {temp}°C,{use}%,{MHz}MHz) "
     return ret
 
 def cpu_time() -> str:
+    if PRIVATE:
+        return ""
     threadt = time.clock_gettime(time.CLOCK_THREAD_CPUTIME_ID)
     processt = time.clock_gettime(time.CLOCK_PROCESS_CPUTIME_ID)
     return f"{threadt:.1f}/{processt:.1f}s CPU"
@@ -442,22 +468,21 @@ tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_PATH)
 config.gradient_checkpointing = True # Enable gradient checkpointing for memory optimization
 config.pad_token_id = tokenizer.pad_token_id
 
-LAYERS_GPU0 = 32 if P100 else 18
+LAYERS_GPU0 = 32 if P100 else 15
 device_map = [('model.embed_tokens', 0)] + [(f'model.layers.{i}', 0 if i < LAYERS_GPU0 else 1) for i in range(0, 31 + 1)] + [
                  ('model.norm', 1),
                  ('lm_head', 1)]
 device_map = {ii:jj for (ii,jj) in device_map}
 
-if P100:
+if P100 or QUANT:  #Fits on one device
+    SINGLE_GPU = True
+
+if SINGLE_GPU:
     #model_kwargs['device_map'] = "auto"
     model_kwargs['device_map'] = "sequential"
     #model_kwargs['device_map'] = device_map
 else:
-    if QUANT:
-        # Fits on one device
-        model_kwargs['device_map'] = "sequential"
-    else:
-        model_kwargs['device_map'] = device_map
+    model_kwargs['device_map'] = device_map
 
 if not 'model' in globals() or RELOAD_MODEL:
     model = None
@@ -578,6 +603,24 @@ error_stopping_criteria = transformers.StoppingCriteriaList([main_stoplist, erro
 
 #torch.cuda.empty_cache()
 #gc.collect()
+
+class GenStreamWatcher(transformers.generation.streamers.BaseStreamer):
+    def __init__(self):
+        self.start_time = None
+        self.tokens = []
+        
+    def put(self, token_ids):
+        # First the prompt is fed in, before KVs are built for it.
+        if list(token_ids.shape) == [1]:
+            self.tokens.append(token_ids.tolist()[0])
+            if self.start_time is None:
+                #print("stream start")
+                self.start_time = time.time()
+            #print(tokenizer.decode(token_ids), end='')
+        
+    def end(self):
+        pass
+
 
 # %% [markdown]
 # # Prompts
@@ -722,10 +765,11 @@ Think step by step to come to a solution with programs, and put your final integ
 
 
 # Badly behaved, just produces code without thought 
-steps0 = ("consise-steps0",  """\"{}\"
+# steps 0 had "positive integer", fixed in steps0_
+steps0 = ("concise-steps0_",  """\"{}\"
 
 Think step by step writing python code to solve this problem. Get to the point. Maths only, no chatting with me. Write out the whole program and print the result.
-If it doesn't work and you can't fix it then stop. Put your final answer within \\boxed{{}}. It must be a positive integer.""",
+If it doesn't work and you can't fix it then stop. Put your final answer within \\boxed{{}}. It must be a non-negative integer.""",
 "\n"        )  # Hopefully stops it producing pythogn without ````python
 
 steps1 = ("concise-steps1",  """\"{}\"
@@ -760,7 +804,11 @@ prompt_options = [elab0, analy1, steps0]
 prompt_options = [steps1, tool0, tool1]  # 17
 prompt_options = [elab0tool, tool0, tool1]  # 18
 prompt_options = [elab0tool, tool0, steps1]  # 15, 17, ?19
-prompt_options = [compute0, cot1, tool0, analy2]  #, elab0tool, ]
+
+prompt_options = [compute0, elab0tool] 
+prompt_options = [compute0, tool0, analy2] # 16
+prompt_options = [compute0, tool0, tool1, steps1, analy2]  #, elab0tool, ]
+prompt_options = [tool1, analy2] # 16
 
 
 # %% [markdown]
@@ -848,32 +896,49 @@ class LLMGenerator:
             stopper = error_stopping_criteria
         else:
             stopper = stopping_criteria
+            
+        streamer = GenStreamWatcher()
+        
+            
         input_len = len(self.tokens)
         #print("ngram stop inactive=", ngram_stopper.inside_code)
-        generation_output = model.generate(**self.model_inputs, 
-                                           max_new_tokens = min(limit, max_toks),
-                                           return_dict_in_generate = USE_PAST_KEY,
-                                           past_key_values = self.past_key_values,
-                                           do_sample = True,
-                                           temperature = temperature,
-                                           top_p = top_p,
-                                           bad_words_ids = self.bad_words,
-                                           #no_repeat_ngram_size = 50,
-                                           pad_token_id = tokenizer.eos_token_id,
-                                           num_return_sequences = 1,
-                                           stopping_criteria = stopper)
-
-        if USE_PAST_KEY:
-            sequences = generation_output.sequences
-            self.past_key_values = generation_output.past_key_values
+        try:
+            generation_output = model.generate(**self.model_inputs, 
+                                               max_new_tokens = min(limit, max_toks),
+                                               return_dict_in_generate = USE_PAST_KEY,
+                                               past_key_values = self.past_key_values,
+                                               do_sample = True,
+                                               temperature = temperature,
+                                               top_p = top_p,
+                                               bad_words_ids = self.bad_words,
+                                               #no_repeat_ngram_size = 50,
+                                               pad_token_id = tokenizer.eos_token_id,
+                                               num_return_sequences = 1,
+                                               streamer = streamer,
+                                               stopping_criteria = stopper)
+        except (torch.cuda.OutOfMemoryError, RuntimeError) as e: # RuntimeError if pytorch caching allocator disabled
+            print(e)
+            self.hit_limit = True
+            self.past_key_values = None
+            self.tokens += streamer.tokens
+            self.model_inputs = {'input_ids': self.tokens}  # torch.tensor([self.tokens]).to(model.device)
         else:
-            sequences = generation_output
-        self.tokens = sequences[0]
+            if USE_PAST_KEY:
+                sequences = generation_output.sequences
+                self.past_key_values = generation_output.past_key_values
+            else:
+                sequences = generation_output
+
+            assert sequences[0][input_len:].tolist() == streamer.tokens  # Checked it passes, so now leave commented
+            self.tokens = sequences[0]
+            self.model_inputs = {'input_ids': sequences}
+        gentime = time.time() - streamer.start_time
+
         decoded_output = tokenizer.decode(self.tokens, skip_special_tokens = False)
         self.new_output = decoded_output[len(self.prompt):]
         self.prompt = decoded_output
         self.need_update = True
-        self.model_inputs = {'input_ids': sequences}
+
         #self.new_output = tokenizer.decode(gen.tokens[input_len:], skip_special_tokens=True)
 
         runt = time.time() - startt
@@ -890,7 +955,7 @@ class LLMGenerator:
             print("HIT MAX_TOKENS")
             self.hit_limit = True
 
-        print(f"<<<<<GEN {new_toks} tokens ({len(self.tokens)} total) in {runt :.1f}s ({new_toks/runt :.1f} tok/s) ({cpu_time()}) {gpu_mem()}\n"
+        print(f"<<<<<GEN {new_toks} tokens ({len(self.tokens)} total) in {gentime :.2f}+{runt - gentime :.2f}s ({(new_toks-1)/gentime :.2f} tok/s) ({cpu_time()}) {gpu_mem()}\n"
               + self.new_output
               + ">>>>>")
 
@@ -927,6 +992,10 @@ def predict(probi, problem):
         print(f"\n\n----QUESTION {probi} - rep.{jj} - time_spent : {time_spent:.0f}/{TIME_LIMIT}, on this prob: {spent_this_prob:.1f}/{time_for_item:.0f} secs")
         if time_spent > TIME_LIMIT or spent_this_prob > time_for_item:
             break
+            
+        print(psutil.cpu_stats())
+        print(psutil.cpu_times())
+        print()
         
         for _ in range(5):
             torch.cuda.empty_cache()
@@ -1217,8 +1286,8 @@ def predict(probi, problem):
                 score += 0.15
             score -= penalty
                     
-        except torch.cuda.OutOfMemoryError as e:
-        #except Exception as e:
+        #except torch.cuda.OutOfMemoryError as e:  # or RuntimeError if pytorch caching allocator disabled
+        except Exception as e:   
             print("predict() EXCEPTION")
             print(e)
             #result_output = -1
