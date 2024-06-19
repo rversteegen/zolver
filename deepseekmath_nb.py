@@ -48,6 +48,8 @@ LOGGING = not PRIVATE
 #VALIDATE, DSET_TAG = "AMC_12_valid", "AMC12V"
 VALIDATE, DSET_TAG = "AIME_test24", "AIME24"
 
+VLLM = False
+
 if PRIVATE:
     SLOW = True
     VALIDATE = False
@@ -63,19 +65,20 @@ MODEL_PATH = "/kaggle/input/deepseek-math"
 LLEMMA = False   # LLEMMA tokenizer
 RELOAD_MODEL = False   # For interactive run-all
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-N_REPETITIONS = 5 if VALIDATE else (20 if SLOW else 1)   # 6
-MAX_SINGLE_GEN_TOKENS = 2048
+N_REPETITIONS = 10 if VALIDATE else (20 if SLOW else 1)   # 6
+MAX_SINGLE_GEN_TOKENS = 1800 if VLLM else 2048
 MAX_GEN_TOKENS = 2048 if SLOW else 500  #CHANGE
 #MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
 MAX_TOKENS = 2048
 
-FIRSTPROB = 0  # ignored for PRIVATE
+
+FIRSTPROB = 30  # ignored for PRIVATE
 
 if PRIVATE:
     NPROBS = 50
     TIME_LIMIT = 31000
 elif VALIDATE:
-    NPROBS = 30 #100
+    NPROBS = 13 #100
     TIME_LIMIT = 13000
 else:
     NPROBS = 1  #10
@@ -111,6 +114,14 @@ if QUANT and not 'installed_libs' in globals():
     !pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
     !pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
     installed_libs = True
+    
+if VLLM:
+    %env MAX_JOBS = 4
+    !pip uninstall -q -y torch
+    !pip install -q -U --no-index --find-links=/kaggle/input/vllm-whl -U vllm
+    #!pip install -U /kaggle/input/bitsandbytes-0-42-0-py3-none-any-whl/bitsandbytes-0.42.0-py3-none-any.whl
+    !pip install -q -U --upgrade /kaggle/input/vllm-t4-fix/grpcio-1.62.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+    !pip install -q -U --upgrade /kaggle/input/vllm-t4-fix/ray-2.11.0-cp310-cp310-manylinux2014_x86_64.whl
 
 # %%
 import os
@@ -129,6 +140,8 @@ from collections import Counter
 import torch
 import transformers
 import accelerate
+if VLLM:
+    from vllm import LLM, SamplingParams
 
 # %%
 if not PRIVATE:
@@ -237,7 +250,7 @@ def process_code(code):
     code_status = False
     try:
         startt = time.time()
-        process = subprocess.run(sys.executable + ' input.py', shell = True, timeout = 14, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
+        process = subprocess.run("timeout 14 " + sys.executable + ' input.py', shell = True, stdout = subprocess.PIPE, stderr = subprocess.PIPE)
         shell_output = (process.stdout + process.stderr).decode('utf8')
         #shell_output = subprocess.check_output(batcmd, shell=True).decode('utf8')
         print(f"<<<<<###<Result ({time.time() - startt :.1f}s):\n" + shell_output + ">###>>>>>")
@@ -438,6 +451,27 @@ def show_model_mem(m):
         print(f"  {dev}: {counts[dev].params / 2**30 :.2f} + {counts[dev].bufs / 2**30 :.2f} GB")
     mem = model.get_memory_footprint()
     print("  Total:", "%.2f GB" % (mem / 2**30))
+    
+
+def nvidia_pstate() -> str:
+    "Get string telling performance state and any active throttling or other 'Clocks Event Reasons'"
+    if PRIVATE:
+        return ""
+    out = subprocess.check_output("nvidia-smi -q -d PERFORMANCE", shell = True).decode()
+
+    info = ""
+    gpublocks = out.split("\nGPU ")[1:]
+    for i, block in enumerate(gpublocks):
+        info += f"(GPU{i}:"
+        for line in block.split("\n"):
+            if "Performance State" in line:
+                # This is always before the Active/Not Active/N/A lines
+                info += 'Pstate=' + line.split(" ")[-1] + " ["
+            elif ": Active" in line:
+                label = line.split(":")[0].strip()
+                info += f"[{label}]"
+        info += "]) "
+    return info
 
 
 # %% [markdown]
@@ -460,52 +494,67 @@ if QUANT == 8:
     model_kwargs['quantization_config'] = transformers.BitsAndBytesConfig(
         load_in_8bit = True,
     )
-
-config = transformers.AutoConfig.from_pretrained(MODEL_PATH)
-
-tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_PATH)
-
-config.gradient_checkpointing = True # Enable gradient checkpointing for memory optimization
-config.pad_token_id = tokenizer.pad_token_id
-
-LAYERS_GPU0 = 32 if P100 else 15
-device_map = [('model.embed_tokens', 0)] + [(f'model.layers.{i}', 0 if i < LAYERS_GPU0 else 1) for i in range(0, 31 + 1)] + [
-                 ('model.norm', 1),
-                 ('lm_head', 1)]
-device_map = {ii:jj for (ii,jj) in device_map}
-
-if P100 or QUANT:  #Fits on one device
-    SINGLE_GPU = True
-
-if SINGLE_GPU:
-    #model_kwargs['device_map'] = "auto"
-    model_kwargs['device_map'] = "sequential"
-    #model_kwargs['device_map'] = device_map
+    
+if VLLM:
+    model = LLM(model=MODEL_PATH, 
+          tokenizer=MODEL_PATH,
+          dtype="half",
+          tensor_parallel_size=2,
+          max_model_len=4096,
+          enforce_eager=True,
+          gpu_memory_utilization=0.95,
+          trust_remote_code=True,
+          #swap_size=7,
+          seed=SEED)
+    
 else:
-    model_kwargs['device_map'] = device_map
 
-if not 'model' in globals() or RELOAD_MODEL:
-    model = None
-    gc.collect()
-    torch.cuda.empty_cache()
-    model = transformers.AutoModelForCausalLM.from_pretrained(
-        MODEL_PATH,
-        torch_dtype="auto",
-        #use_flash_attention_2=True,
-        trust_remote_code=True,
-        config=config,
-        **model_kwargs
-    )
+    config = transformers.AutoConfig.from_pretrained(MODEL_PATH)
 
-# Disable memory-efficient sparse tensors for CUDA operations
-torch.backends.cuda.enable_mem_efficient_sdp(False)
+    tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_PATH)
 
-#print(model)
-print()
-print("Model", MODEL_PATH)
-print("dtype", model.dtype, model.hf_device_map)
+    config.gradient_checkpointing = True # Enable gradient checkpointing for memory optimization
+    config.pad_token_id = tokenizer.pad_token_id
 
-show_model_mem(model)
+    LAYERS_GPU0 = 32 if P100 else 15
+    device_map = [('model.embed_tokens', 0)] + [(f'model.layers.{i}', 0 if i < LAYERS_GPU0 else 1) for i in range(0, 31 + 1)] + [
+                     ('model.norm', 1),
+                     ('lm_head', 1)]
+    device_map = {ii:jj for (ii,jj) in device_map}
+
+    if P100 or QUANT:  #Fits on one device
+        SINGLE_GPU = True
+
+    if SINGLE_GPU:
+        #model_kwargs['device_map'] = "auto"
+        model_kwargs['device_map'] = "sequential"
+        #model_kwargs['device_map'] = device_map
+    else:
+        model_kwargs['device_map'] = device_map
+
+    if not 'model' in globals() or RELOAD_MODEL:
+        model = None
+        gc.collect()
+        torch.cuda.empty_cache()
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            MODEL_PATH,
+            torch_dtype="auto",
+            #use_flash_attention_2=True,
+            trust_remote_code=True,
+            config=config,
+            **model_kwargs
+        )
+
+    # Disable memory-efficient sparse tensors for CUDA operations
+    torch.backends.cuda.enable_mem_efficient_sdp(False)
+
+    #print(model)
+    print()
+    print("Model", MODEL_PATH)
+    print("dtype", model.dtype, model.hf_device_map)
+
+    show_model_mem(model)
+    
 show_gpu_mem()
 
 
@@ -808,14 +857,15 @@ prompt_options = [elab0tool, tool0, steps1]  # 15, 17, ?19
 prompt_options = [compute0, elab0tool] 
 prompt_options = [compute0, tool0, analy2] # 16
 prompt_options = [compute0, tool0, tool1, steps1, analy2]  #, elab0tool, ]
-prompt_options = [tool1, analy2] # 16
-
+prompt_options = [tool1, analy2] # 21, X16
+#prompt_options = [tool1, analy2, compute0]
 
 # %% [markdown]
 # # Generation and main loop
 
 # %%
 
+# %%
 class LLMGenerator:
     def __init__(self):
         self.tokens = tokenizer("")['input_ids']
@@ -921,6 +971,7 @@ class LLMGenerator:
             self.hit_limit = True
             self.past_key_values = None
             self.tokens += streamer.tokens
+            print("OOM recovered")
             self.model_inputs = {'input_ids': self.tokens}  # torch.tensor([self.tokens]).to(model.device)
         else:
             if USE_PAST_KEY:
@@ -955,7 +1006,7 @@ class LLMGenerator:
             print("HIT MAX_TOKENS")
             self.hit_limit = True
 
-        print(f"<<<<<GEN {new_toks} tokens ({len(self.tokens)} total) in {gentime :.2f}+{runt - gentime :.2f}s ({(new_toks-1)/gentime :.2f} tok/s) ({cpu_time()}) {gpu_mem()}\n"
+        print(f"<<<<<GEN {new_toks} tokens ({len(self.tokens)} total) in {gentime :.2f}+{runt - gentime :.2f}s ({(new_toks-1)/gentime :.2f} tok/s) ({cpu_time()}) {gpu_mem()} {nvidia_pstate()}\n"
               + self.new_output
               + ">>>>>")
 
@@ -965,6 +1016,122 @@ class LLMGenerator:
     def set_bad_words(self, words: list):
         self.bad_words = tokenizer(words, add_special_tokens = False)['input_ids']
 
+# %%
+if VLLM:
+    
+    class LLMGenerator:
+        def __init__(self):
+            self.tokens = [] #tokenizer("")['input_ids']
+            self.prompt = "" #tokenizer.decode(self.tokens)  # Will be equal to tokenizer.bos_token
+            self.num_gen_tokens = 0  # Total, not including prompt and outputs
+            self.past_key_values = None
+            self.hit_limit = False
+            self.need_update = True
+            self.stop_on_error = True
+            self.bad_words = None
+    
+        def user_prompt(self, text, assist_prefix = ""):
+            """Add `text` to the prompt as a User message, followed by Assistant:, and optionally start of assistant response.
+            Call this before the first .generate() or at any time to add a User direction."""
+            old_input = len(self.tokens)
+            ol = len(self.prompt)
+            if True:
+                # DeepSeek specific template
+                if old_input > 1 and not self.prompt.endswith(tokenizer.eos_token):
+                    self.prompt += tokenizer.eos_token
+                if True:
+                    self.prompt += ("User: " + text.strip() + "\n\nAssistant: " + assist_prefix.strip(' ')).strip(' ')
+                else:
+                    self.prompt += ("User: " + text.strip() + "\n\n" + assist_prefix.strip(' ')).strip(' ')
+            else:
+                self.messages += [{"role": "user", "content": text}]
+                if assist_prefix:
+                    self.messages.append({"role": "assistant", "content": assist_prefix})
+            self.update_inputs()
+            print(f"<<<<<PROMPT {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + self.prompt[ol:] + ">>>>>")
+
+        def append_prompt(self, text):
+            "Append to prompt, without changing the role."
+            text = text.rstrip(' ')
+            self.prompt += text
+            old_input = len(self.tokens)
+            self.update_inputs()
+            print(f"<<<<<APPEND {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + text + ">>>>>")
+
+        def replace_tokens(self, new_tokens):
+            self.tokens = new_tokens
+            self.past_key_values = None
+            self.decode_tokens()
+
+        def replace_prompt(self, new_prompt):
+            self.prompt = new_prompt
+            self.past_key_values = None
+            self.update_inputs()
+
+        def check_limit(self):
+            max_toks = min(MAX_SINGLE_GEN_TOKENS, MAX_TOKENS - len(self.tokens), MAX_GEN_TOKENS - self.num_gen_tokens)
+            return max_toks
+
+
+
+        def generate(self, temperature = 0.8, top_p = 0.95):
+
+            sampling_params = SamplingParams(temperature=temperature,
+                                             top_p=top_p,
+                                             max_tokens=MAX_SINGLE_GEN_TOKENS,
+                                             include_stop_str_in_output = True,
+                                             stop = [tokenizer.eos_token] + stop_words,
+                                            )
+            startt = time.time()
+            generation_output = llm.generate(prompt, sampling_params=sampling_params)
+
+            # Adjust this line based on the actual return type
+            if isinstance(generation_output, list) and len(generation_output) > 0:
+                if hasattr(generation_output[0], 'outputs') and len(generation_output[0].outputs) > 0:
+                    decoded_output = generation_output[0].outputs[0].text
+                else:
+                    raise ValueError("Expected 'outputs' attribute with a nested 'text' attribute in the first element of the list")
+            #elif isinstance(generation_output, dict) and 'text' in generation_output:
+            #    decoded_output = generation_output['text']
+            else:
+                raise ValueError("Unexpected generation output format")
+
+            #print(f"{decoded_output[current_printed:]}\n")
+
+            output = generation_output[0].outputs[0]
+            new_toks = len(output.token_ids)
+            self.new_output = output.text
+            self.tokens = generation_output[0].prompt_token_ids + output.token_ids
+            self.num_gen_tokens += len(output.token_ids)
+
+            endt = time.time()
+            runt = endt - startt
+
+            metrics = generation_output[0].metrics            
+            gentime = endt - metrics.first_token_time
+            #print(metrics)
+            #print("strt time=", startt)
+            #print("last time=", metrics.last_token_time)
+            #print("1stt time=", metrics.first_token_time)
+            #print("fin time =", metrics.finished_time)
+            #print("real time=", endt)
+
+            print("stopreason=", output.stop_reason)
+
+            print(f"<<<<<GEN {new_toks} tokens ({len(self.tokens)} total) in {gentime :.2f}+{runt - gentime :.2f}s ({(new_toks-0)/gentime :.2f} tok/s) ({cpu_time()}) {gpu_mem()} {nvidia_pstate()}\n"
+                  + self.new_output
+                  + ">>>>>")
+
+            self.prompt = decoded_output
+            self.stop_reason = output.stop_reason
+
+    def endswith(self, text):
+        return self.prompt.endswith(text)
+    
+    def set_bad_words(self, words: list):
+        pass#self.bad_words = tokenizer(words, add_special_tokens = False)['input_ids']
+
+# %%
 if LOGGING:
     logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'score', 'answer', 'result_info', 'gen_tokens', 'code_blocks', 'code_errors', 'time', 'bad'])
     
