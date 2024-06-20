@@ -1,11 +1,13 @@
 ### Instruction
 
-An expression is any formula such as "x * y" or "count([x], min(x))". A proposition is any expression with a boolean value, such as "a > 2 and" or "is_prime(x)"
+An expression is any formula such as "x * y" or "count([x], min(x))". A proposition is any expression with a boolean value, such as "a > 2 and" or "is_prime(x)".
+Unknowns must be declared before they are used.
 Please directly translate the following maths problem statements into the CASconstraint constraint-solving computer algebra system using the syntax given by the following lookup table (similar to python, sympy and z3):
 • comment → # comment
 • greatest common divisor of x and y → gcd(x, y)
-• least common multiple of x and y → gcd(x, y)
-• x choose y combinations → comb(x, y)
+• least common multiple of x and y → lcm(x, y)
+• x choose y combinations → comb(x, y)   %% x and y should be integer-valued
+• proposition p is a constraint → constraint(p)
 • x is a real unknown (or variable) → x : Real
 • x is an integer unknown → x : Int
 • x is positive → constraint(x > 0)
@@ -18,22 +20,22 @@ Please directly translate the following maths problem statements into the CAScon
 • a = b → a == b
 • x_i is an unbounded sequence of reals → x : Seq(Real)
 • x_i is an unbounded sequence of integers → x : Seq(Int)
-• x_i is a sequence for i ∈ 1, …, 32 → x : Seq(limit = 32)
+• x_i is a sequence of integers for i ∈ 1, …, 32 → x : Seq(Int, limit = 32)
 • the sequence of integers 1, …, 32 → seq(1, 32)
 • x_i → x[i]
 • sum of x_i for i ∈ S → sum([i], i in S, x[i])
+• a series a_1 + a_2 + ... → sum(a)  %% 'a' must be declared as a Seq
 • a pair of expressions (x, y) → [x, y]
 • the sequence of digits of x in base b → digits(x, b)
 • the set of possible values of an expression → set(e)
 • the set of values of x such that proposition p holds → set(x, p)
-• the set of pairs x, y such that proposition p holds → set([x, y], p)
+• the set of pairs x, y such that proposition p holds → set([x, y], p)  %% Any number of variables allowed
 • x ∈ S → x in S
-• proposition p is a constraint → constraint(p)
 • p implies q → Implies(p, q)
 • p and q → p and q
 • p or q → p or q
 • p if and only if q → Iff(p, q)
-• if p then a else b → If(p, a, b)
+• if p then a else b → If(p, a, b)   %% This is an expression
 • for all i (one or more variables) such that constraint r holds, e → ForAll([i], r, e)
 • for all i and j, e holds → ForAll([i], True, e)
 • for all i ∈ S, p → ForAll([i], i in S, p)
@@ -45,44 +47,41 @@ Please directly translate the following maths problem statements into the CAScon
 • the number of possible values of variables x and y such that p → count([x, y], p)
 • find expression e → goal = e
 
-Use comments starting with '#' to explain how your translated variables and constraints correspond to the problem statement.
-
-Usually, multiple translations are possible. You can provide several.
-
-Remember, give a *direct* tranlation into the algebra system, don't try to solve the problem!
-Do not try to apply any formulas. Write down the formulas as constraints.
+Use comments starting with '#' to explain how your translated variables and constraints correspond to the problem statement BUT give a *direct* tranlation into the algebra system, don't try to solve the problem!
+Make the translation as close as possible to the original English while following the correct syntax!
+Put all the relevant information in the problem statement into your translation. If a quantity or formula exists is mentioned in the problem it should be used in the translation!
 
 ### Statement
 "When the greatest common divisor and least common multiple of two integers are multiplied, the product is 180. How many different values could be the greatest common divisor of the two integers?"
 
 ### CASconstraint Translation
-```python
+{startblock}
 # Let's name the two integers a and b:
 a : Int
 b : Int
 constraint(gcd(a, b) * lcm(a, b) == 180)
 # The number of possible values of gcd(a, b):
 goal = count(gcd(a, b))
-```
+{endblock}
 
 ### Statement
 "What is the first natural number after 42 that has a remainder of $5$ when divided by $7?"
 
 ### CASconstraint Translation
-```python
+{startblock}
 # Call this natural number 'a'
 a : Int
 constraint(a > 42)
 constraint(a % 7 == 5)
 # The first such number is the minimum of all possible assignments to 'a'
 goal = min(a)
-```
+{endblock}
 
 ### Statement
 "A geometric sequence starts with $a_1 = 2$. If $a_4 = 6$ what is $a_9$?""
 
 ### CASconstraint Translation
-```python
+{startblock}
 # In general, 'a' may contain real numbers
 a : Seq(Real)
 # A geometric sequence is defined by a[i] = r * a[i - 1]
@@ -93,32 +92,25 @@ ForAll([i], i > 1, a[i] == r * a[i - 1])
 constraint(a[1] == 2)
 constraint(a[4] == 6)
 goal = a[9]
-```
+{endblock}
 
 ### Statement
 "A complex number $x+yi$ has magnitude 2 when added to 3+4i. What's the minimum possible value of $x + y$?"
 
-
 ### CASconstraint Translation
-```python
+{startblock}
 # We can either use two Real variables x and y or a single Complex variable z = x+yi. A single variable is easier for arithmetic
 z : Complex
 constraint(abs(z + 3+4*I) == 2)
 # We want to minimize x + y
 goal = min(Re(z) + Im(z))
-```
+{endblock}
 
 ### CASconstraint Translation
-```python
+{startblock}
 # Alternatively, we can use reals, and the magnitude of a complex number z is defined as sqrt(Re(z)^2 + Im(z)^2)
 x : Real
 y : Real
 constraint(sqrt(((x+3)^2 + (y+4)^2) == 2)
 goal = min(x + y)
-```
-
-### Statement
-"{}"
-
-### CASconstraint Translation
-```python
+{endblock}
