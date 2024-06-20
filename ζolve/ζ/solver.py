@@ -26,4 +26,4 @@ class Workspace:
         #     sol.add_variable(var)
         for fact in self.facts:
             sol.add_constraint(fact)
-        sol.solve()
+        return sol.solve()

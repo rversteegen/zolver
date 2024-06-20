@@ -62,6 +62,8 @@ sol = sol.rename({'problem_id':'prob_name'}, axis = 1)
 
 
 com = sol.merge(prob, on='prob_name')
+# Need to .apply(int) since if any answers are > 2**64 pandas leaves the whole column as strings
+com.answer = com.answer.apply(int)
 com['correct'] = (com.answer % 1000) == com.solution
 com['scored'] = com.correct * com.score
 

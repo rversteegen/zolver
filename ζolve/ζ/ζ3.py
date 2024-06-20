@@ -6,6 +6,18 @@ import sympy
 from ζ import dsl
 
 
+
+def num_to_py(ref: ArithRef):
+    "Convert a z3 number to a python int or float"
+    if isinstance(ref, IntNumRef):
+        return ref.as_long()
+    elif isinstance(ref, RatNumRef):
+        return ref.numerator_as_long() / ref.denominator_as_long()
+    elif isinstance(ref, AlgebraicNumRef):
+        return float(ref.as_decimal(16).strip('?'))
+    return None
+
+
 class SympyToZ3:
     def __init__(self):
         self.varmap = {}
@@ -52,10 +64,8 @@ class SympyToZ3:
             # Note Z3 doesn't have a RatSort, rationals are RealSort.
             z3var = Real(sym.name)
             # TODO, add rational constraint? Probably hardly matters
-        elif sym.is_complex:
-            assert False
         else:
-        #elif sym.is_real:
+            assert sym.is_real
             # Assume real, but sympy doesn't assume a plain Symbol() is real
             z3var = Real(sym.name)
 
@@ -73,11 +83,20 @@ class SympyToZ3:
         if isinstance(node, sympy.Symbol):
             return self.symbol_to_z3(node)
 
-        try:
+        if node.func in self.z3translations:
             trans = self.z3translations[node.func]
-        except KeyError:
+        elif isinstance(node, sympy.Integer):
+            # Special constants One, Zero
+            trans = self.z3translations[sympy.Integer]
+        elif isinstance(node, sympy.Rational):
+            # Special constant Half
+            trans = self.z3translations[sympy.Rational]
+        elif node in self.z3translations:
             # E.g. 'true' and 'false' objects.
             trans = self.z3translations[node]
+        else:
+            print(node, repr(node), type(node))
+            raise NotImplementedError
         args = [self.to_z3(arg) for arg in node.args]
         #print(f"TRANS {node.func}({node}, {args})")
 
@@ -142,7 +161,10 @@ class Z3Solver():
         else:
             self.sol = Solver()
             self.sol.set('randomize', False)  # for nlsat
+            self.sol.set('max_memory', 500)
+            # Also has an rlimit option, what does it do?
             self.goal = self.trans.to_z3(goal)
+        self.sol.set('timeout', 5000)
 
     def set_goal(self, spexp: sympy.Expr):
         #if spexp.func == 
@@ -158,9 +180,12 @@ class Z3Solver():
         print("z3 check() =", self.sol.check())
         m = self.sol.model()
         print("z3 model() =", m)
-        print(self.goal, " evaluated to ", m.eval(self.goal))
+        ret = m.eval(self.goal, model_completion = True)
+        print(self.goal, " evaluated to ", ret)
+        ret = num_to_py(ret)
         if self.objective is not None:
             print("solve(): objective range is ", self.objective.lower(), "to", self.objective.upper())
+        return ret
 
     def solve2(self):
         "Disable MBQI and use just E-matching"
