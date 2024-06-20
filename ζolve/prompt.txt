@@ -1,70 +1,124 @@
 ### Instruction
-Please translate the following problem statements into a computer algebra system using patterns from the following lookup table:
+
+An expression is any formula such as "x * y" or "count([x], min(x))". A proposition is any expression with a boolean value, such as "a > 2 and" or "is_prime(x)"
+Please directly translate the following maths problem statements into the CASconstraint constraint-solving computer algebra system using the syntax given by the following lookup table (similar to python, sympy and z3):
+• comment → # comment
 • greatest common divisor of x and y → gcd(x, y)
 • least common multiple of x and y → gcd(x, y)
 • x choose y combinations → comb(x, y)
-• x is a real unknown → x = variable()
-• x is an integer unknown → x = variable(integer = True)
-• x_i is an infinite sequence → x = seq()
-• x_i is a sequence for i ∈ 1, …, 32 → x = seq(limit = 32)
-• 1, …, 32 → range(1, 32)
-• x_i → x[i]
-• sum of x_i for i ∈ S → sum(x, S)
-• a = b → a == b
-• the sequence of digits of x in base b → digits(x, b)
-• sum of x_i for i ∈ S → sum(x, S)
-• the set of x such that r holds → set(x, r)
-• for i ∈ S, e → for(i, S, e)
-• for i such that constraint r holds, e → for(i, r, e)
-• equation or relation r is a constraint → constraint(r 
+• x is a real unknown (or variable) → x : Real
+• x is an integer unknown → x : Int
 • x is positive → constraint(x > 0)
-• x is prime → constraint(prime(x))
-• x is the smallest value in S → constraint(x == min(S))
-• the largest possible value of x → max(x)
-• the size of set S → max(S)
-• the number of possible solutions of relation r → count(r)
-• the number of possible values of x such that r holds → count(r, x)
-• find x → goal = x
+• x is a complex unknown → x : Complex
+• imaginary unit i → I
+• complex number ai + b → a * I + b
+• real part of z∈ℂ → Re(z)
+• imaginary part of z∈ℂ → Im(z)
+• the absolute value or magnitude of a real or complex value → abs(x)
+• a = b → a == b
+• x_i is an unbounded sequence of reals → x : Seq(Real)
+• x_i is an unbounded sequence of integers → x : Seq(Int)
+• x_i is a sequence for i ∈ 1, …, 32 → x : Seq(limit = 32)
+• the sequence of integers 1, …, 32 → seq(1, 32)
+• x_i → x[i]
+• sum of x_i for i ∈ S → sum([i], i in S, x[i])
+• a pair of expressions (x, y) → [x, y]
+• the sequence of digits of x in base b → digits(x, b)
+• the set of possible values of an expression → set(e)
+• the set of values of x such that proposition p holds → set(x, p)
+• the set of pairs x, y such that proposition p holds → set([x, y], p)
+• x ∈ S → x in S
+• proposition p is a constraint → constraint(p)
+• p implies q → Implies(p, q)
+• p and q → p and q
+• p or q → p or q
+• p if and only if q → Iff(p, q)
+• if p then a else b → If(p, a, b)
+• for all i (one or more variables) such that constraint r holds, e → ForAll([i], r, e)
+• for all i and j, e holds → ForAll([i], True, e)
+• for all i ∈ S, p → ForAll([i], i in S, p)
+• x is a prime number → constraint(is_prime(x))
+• x is the smallest value in set S → constraint(x == min(S))
+• the largest possible value of an expression e → max(e)
+• the size of set S → count(S)
+• the number of possible values of expression e → count(set(e))
+• the number of possible values of variables x and y such that p → count([x, y], p)
+• find expression e → goal = e
+
+Use comments starting with '#' to explain how your translated variables and constraints correspond to the problem statement.
+
+Usually, multiple translations are possible. You can provide several.
+
+Remember, give a *direct* tranlation into the algebra system, don't try to solve the problem!
+Do not try to apply any formulas. Write down the formulas as constraints.
 
 ### Statement
 "When the greatest common divisor and least common multiple of two integers are multiplied, the product is 180. How many different values could be the greatest common divisor of the two integers?"
 
-### Translation
-```
-a = variable(integer = True)
-b = variable(integer = True)
+### CASconstraint Translation
+```python
+# Let's name the two integers a and b:
+a : Int
+b : Int
 constraint(gcd(a, b) * lcm(a, b) == 180)
+# The number of possible values of gcd(a, b):
 goal = count(gcd(a, b))
 ```
 
 ### Statement
 "What is the first natural number after 42 that has a remainder of $5$ when divided by $7?"
 
-### Translation
-```
-a = variable(natural = True)
+### CASconstraint Translation
+```python
+# Call this natural number 'a'
+a : Int
 constraint(a > 42)
 constraint(a % 7 == 5)
+# The first such number is the minimum of all possible assignments to 'a'
 goal = min(a)
 ```
 
 ### Statement
 "A geometric sequence starts with $a_1 = 2$. If $a_4 = 6$ what is $a_9$?""
 
-### Translation
-```
-a = seq()
-r = variable()
-i = variable(integer = True)
-for(i, i > 1, a[i] == r * a[i - 1])
+### CASconstraint Translation
+```python
+# In general, 'a' may contain real numbers
+a : Seq(Real)
+# A geometric sequence is defined by a[i] = r * a[i - 1]
+r : Real
+i : Int
+ForAll([i], i > 1, a[i] == r * a[i - 1])
+# Two elements of 'a' are given:
 constraint(a[1] == 2)
 constraint(a[4] == 6)
 goal = a[9]
 ```
 
 ### Statement
-"{}"
+"A complex number $x+yi$ has magnitude 2 when added to 3+4i. What's the minimum possible value of $x + y$?"
 
-### Translation
+
+### CASconstraint Translation
+```python
+# We can either use two Real variables x and y or a single Complex variable z = x+yi. A single variable is easier for arithmetic
+z : Complex
+constraint(abs(z + 3+4*I) == 2)
+# We want to minimize x + y
+goal = min(Re(z) + Im(z))
 ```
 
+### CASconstraint Translation
+```python
+# Alternatively, we can use reals, and the magnitude of a complex number z is defined as sqrt(Re(z)^2 + Im(z)^2)
+x : Real
+y : Real
+constraint(sqrt(((x+3)^2 + (y+4)^2) == 2)
+goal = min(x + y)
+```
+
+### Statement
+"{}"
+
+### CASconstraint Translation
+```python
