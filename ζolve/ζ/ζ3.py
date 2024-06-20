@@ -3,7 +3,8 @@ from typing import Union as tyUnion
 
 from z3 import *
 import sympy
-#from ζ import funcs
+from ζ import dsl
+
 
 class SympyToZ3:
     def __init__(self):
@@ -122,6 +123,14 @@ class Z3Solver():
     def __init__(self, goal = None, max = None, min = None):
         self.trans = SympyToZ3()
         self.objective = None
+        print("goal is", repr(goal))
+        if isinstance(goal, dsl.max):  # in fact type(dsl.max(...)) == dsl.max !
+            assert len(goal.args) == 1
+            max = goal.args[0]
+        if isinstance(goal, dsl.min):
+            assert len(goal.args) == 1
+            min = goal.args[0]
+
         if max is not None:
             self.sol = Optimize()
             self.goal = self.trans.to_z3(max)
@@ -146,12 +155,12 @@ class Z3Solver():
         self.sol.add(self.trans.to_z3(spexp))
 
     def solve(self):#, spexp: sympy.Expr):
-        print(self.sol.check())
+        print("z3 check() =", self.sol.check())
         m = self.sol.model()
-        print(m)
-        print(self.goal, "==", m.eval(self.goal))
+        print("z3 model() =", m)
+        print(self.goal, " evaluated to ", m.eval(self.goal))
         if self.objective is not None:
-            print("objective range", self.objective.lower(), "to", self.objective.upper())
+            print("solve(): objective range is ", self.objective.lower(), "to", self.objective.upper())
 
     def solve2(self):
         "Disable MBQI and use just E-matching"
