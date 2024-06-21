@@ -11,28 +11,26 @@ import os
 sys.path.append("ζolve")
 from ζ import dsl_parse
 
-#TAG = "MMMistral"
-#TAG = "OMMistral7b"
-#VER = "v3"
-#for LEVEL in (3,4,5):
-    #fname = f"{TAG}_{VER}_MATH_level{LEVEL}_translations.csv"
-
 INPUTDIR = "translations/new/"
 
-info = ""
+extracts = ""
 
-for fname in os.listdir(INPUTDIR):
-    if not fname.endswith('.csv'):
-        continue
+def process_file(fname):
+    global extracts
 
     df = pd.read_csv(INPUTDIR + fname)
 
-    parsed = 0
-    failed = 0
-    ran = 0
-    excepts = 0
-    correct = 0
-    wrong = 0
+    stats = pd.DataFrame(
+        {
+         'total': len(df),
+         'parsed': 0,
+         'failed': 0,
+         'ran': 0,
+         'wrong': 0,
+         'correct': 0,
+         'unimp': 0,
+         'excepts': 0,
+         }, index = [fname])
 
     for idx in df.index:
         row = df.loc[idx]
@@ -42,34 +40,53 @@ for fname in os.listdir(INPUTDIR):
             workspace = dsl_parse.load_dsl(row.translation, verbose = False)
             print("--------------------------------------------******SUCCESS")
             workspace.print()
-            parsed += 1
+            stats.parsed += 1
             try:
                 ans = workspace.solve()
                 print("********************************************************************************DONE")
-                ran += 1
+                stats.ran += 1
                 print("True answer is", row.answer, ans)
                 if row.answer == ans:
-                    correct += 1
+                    stats.correct += 1
+                    extracts += "\n\n" + row.problem + "\n\n----->\n" + row.translation
                 else:
-                    wrong += 1
+                    stats.wrong += 1
             except NotImplementedError:
                 print("NotImplementedError")
+                stats.unimp += 1
             except Exception as e:
                 print("uncaught except", e)
-                excepts += 1
+                stats.excepts += 1
 
         except (SyntaxError, dsl_parse.DSLError) as e:
             print("--------------------------------------------------FAILED")
             print(e)
-            failed += 1
+            stats.failed += 1
         except Exception as e:
             print("uncaught except", e)
-            failed += 1
-            excepts += 1
+            stats.failed += 1
+            stats.excepts += 1
 
 
-    info += f"{fname}:\t solved {correct}, wrong {wrong}, {ran} parsed+ran, {parsed} parsed and {failed} failed to parse of {len(df)} total; {excepts} unexpected exceptions\n"
-
-print(info)
+    return stats
 
 
+if False:
+    LEVEL = 5
+    TAG = "MMMistral"
+    #TAG = "OMMistral7b"
+    VER = "v3"
+    fname = f"{TAG}_{VER}_MATH_level{LEVEL}_translations.csv"
+    stats = process_file(fname)
+    print(stats)
+    stats = stats.iloc[0]
+    print(f"{fname}:\t solved {stats.correct}, wrong {stats.wrong}, {stats.ran} parsed+ran, {stats.parsed} parsed and {stats.failed} failed to parse of {stats.total} total; {stats.excepts} unexpected exceptions\n")
+
+else:
+    stats = pd.DataFrame()
+    for fname in os.listdir(INPUTDIR):
+        if fname.endswith('.csv'):
+            stats = pd.concat([stats, process_file(fname)])
+    print(stats)
+
+#print(extracts)
