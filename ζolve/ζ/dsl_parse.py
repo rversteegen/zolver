@@ -20,6 +20,9 @@ import ζ.util
 global_namespace = {}
 exec('from ζ.dsl import *', global_namespace)
 
+SECONDS_LIMIT = 6
+MB_LIMIT = 500  # Minimum needed is about 185
+
 
 class DSLError(Exception):
     pass
@@ -133,8 +136,8 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
         print("REWRITTEN:\n", ast.dump(a, indent=4, include_attributes = True))
     e = compile(a, "<string>", mode)
     try:
-        with ζ.util.time_limit(6):
-            with ζ.util.memory_limit(64 * 2**20):
+        with ζ.util.time_limit(SECONDS_LIMIT):
+            with ζ.util.memory_limit(MB_LIMIT * 2**20):
                 return eval(e, global_dict, local_dict)
     except Exception as e:
         raise DSLError(f"DSL script threw {type(e).__name__} '{str(e).strip()}'  on line  '{string}'")

@@ -16,12 +16,23 @@ def assertclose(res, expected):
 
 
 # memory_limit and time_limit are from https://www.kaggle.com/code/eabdullin/mathgenie-interlm-20b-interactive-code-running
-# who knows the original source.
+# who knows the original source. I modified.
 
 class TimeoutException(Exception): pass
 
+# RLIMIT_DATA (data and heap) amount is roughly 60MB less than RLIMIT_AS (address space) but still
+# seems to be 150MB more than the actual RSS. (RLIMIT_RSS does nothing in modern Linux).
+# So need at least 200MB.
+# Warning, creating a z3.Optimize() solver always fails with "WARNING: out of memory" if an rlimit
+# is set, no matter how high it is!
 @contextmanager
-def memory_limit(limit, type=resource.RLIMIT_AS):
+def memory_limit(limit, type=resource.RLIMIT_DATA):
+    "limit in bytes"
+    # Try to be more invariant to existing memory use. However, another thread could do anything
+    # However maxrss does NOT correspond to RELIMIT_DATA!
+    limit += 1024 * resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    print("total limit", limit/2**20)
+
     soft_limit, hard_limit = resource.getrlimit(type)
     resource.setrlimit(type, (limit, hard_limit)) # set soft limit
     try:

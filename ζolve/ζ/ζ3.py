@@ -164,7 +164,7 @@ class Z3Solver():
             self.sol.set('max_memory', 500)
             # Also has an rlimit option, what does it do?
             self.goal = self.trans.to_z3(goal)
-        self.sol.set('timeout', 5000)
+        self.sol.set('timeout', 5000)  # ms
 
     def set_goal(self, spexp: sympy.Expr):
         #if spexp.func == 
