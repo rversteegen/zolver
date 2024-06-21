@@ -1,8 +1,8 @@
 import sympy
 
-from . import vector as vec
+#from . import vector as vec
 #from ζ.vector import inf
-from ζ import ζ3
+import ζ.ζ3
 
 
 
@@ -20,10 +20,18 @@ class Workspace:
         print("goal:", self.goal)
 
     def solve(self):
-        sol = ζ3.Z3Solver(goal = self.goal)
+        """Apply all methods to solve.
+        Returns None if unsolved, a string if the formulation is bad
+        ('unsat' if unsolvable, 'multiple' if not unique),
+        or an int or float if solved."""
+        sol = ζ.ζ3.Z3Solver(goal = self.goal)
         # Not needed
         # for varname, var in variables.items():
         #     sol.add_variable(var)
         for fact in self.facts:
             sol.add_constraint(fact)
-        return sol.solve()
+        ret = sol.solve()
+        if ret is True: # solved
+            return sol.solutions[0]
+        return ret  # None, 'unsat', 'multiple'
+

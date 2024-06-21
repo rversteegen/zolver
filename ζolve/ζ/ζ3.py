@@ -1,3 +1,4 @@
+import time
 from functools import reduce
 from typing import Union as tyUnion
 
@@ -200,23 +201,67 @@ class Z3Solver():
     def add_constraint(self, spexp: sympy.Expr):
         self.sol.add(self.trans.to_z3(spexp))
 
-    def solve(self):#, spexp: sympy.Expr):
-        print("z3 check() =", self.sol.check())
+    def find_one_solution(self):
+        "Returns unsat->'unsat', unknown->None, sat->True and appends to self.solutions"
+        print("z3 solver =", self.sol)
+        ctime = time.time()
+        result = self.sol.check()
+        ctime = time.time() - ctime
+        print(f"z3 check() = {result} in {1e3 * ctime :.1f}ms")
+        if result == unsat:
+            return 'unsat'
+        if result == unknown:
+            return None
         m = self.sol.model()
         print("z3 model() =", m)
-        ret = m.eval(self.goal, model_completion = True)
-        print(self.goal, " evaluated to ", ret)
-        ret = num_to_py(ret)
+        result = m.eval(self.goal, model_completion = True)
+
+        print(self.goal, " evaluated to ", result)
+        result = num_to_py(result)
+        assert result not in self.solutions
+        self.solutions.append(result)
         if self.objective is not None:
             print("solve(): objective range is ", self.objective.lower(), "to", self.objective.upper())
-        return ret
+        return True
 
-    def solve2(self):
+    def find_next_solution(self):
+        "Blocks the previous solution and calls find_one_solution"
+        m = self.sol.model()
+        # Block existing assignment
+        self.sol.add(self.goal != m.eval(self.goal, model_completion = True))
+        return self.find_one_solution()
+
+    def solve(self):#, spexp: sympy.Expr):
+        """Returns a value:
+        -True if solved, and self.solutions is list of one int or float
+        -'unsat' if unsat, and self.solutions = []
+        -'multiple' if not unique, and self.solutions a list of two or more solutions
+        -None if unsolved
+        """
+        #print("z3 solver =", self.sol)
+        self.solutions = []
+        ret = self.find_one_solution()
+        if ret is not True:
+            return ret
+
+        if self.objective is None:
+            # goal isn't min/max, so check for unique solution
+            ret = self.find_next_solution()
+            if ret:
+                return 'multiple'  # Not unique
+            if ret is None:
+                raise Exception("find_next_solution = unknown")
+
+        return True
+
+    # Unused
+
+    def __solve2(self):
         "Disable MBQI and use just E-matching"
         self.sol.set('smt.autoconf', False)  # ???
         self.sol.set('smt.mbqi', False)
 
-    def qsat_solver(self):
+    def __qsat_solver(self):
         "Useful solver for various quantified fragments"
         self.sol = Tactic('qsat').solver()
 

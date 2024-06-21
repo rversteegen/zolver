@@ -31,7 +31,6 @@ def memory_limit(limit, type=resource.RLIMIT_DATA):
     # Try to be more invariant to existing memory use. However, another thread could do anything
     # However maxrss does NOT correspond to RELIMIT_DATA!
     limit += 1024 * resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    print("total limit", limit/2**20)
 
     soft_limit, hard_limit = resource.getrlimit(type)
     resource.setrlimit(type, (limit, hard_limit)) # set soft limit

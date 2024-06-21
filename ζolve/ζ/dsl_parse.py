@@ -21,7 +21,7 @@ global_namespace = {}
 exec('from ζ.dsl import *', global_namespace)
 
 SECONDS_LIMIT = 6
-MB_LIMIT = 500  # Minimum needed is about 185
+MB_LIMIT = 4000  # Minimum needed is about 185
 
 
 class DSLError(Exception):
