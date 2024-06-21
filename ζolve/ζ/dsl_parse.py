@@ -292,9 +292,9 @@ def load_dsl(script, verbose = True):
 
     return workspace
 
-def load_dsl_file(path):
+def load_dsl_file(path, **kwargs):
     with open(path) as f:
-        return load_dsl(f.read())
+        return load_dsl(f.read(), **kwargs)
 
 
 ################################################################################

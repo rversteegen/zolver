@@ -74,6 +74,7 @@ class ζSymbol(Symbol):
 # Nat0 = lambda name, **assumptions: Symbol(name, integer=True, nonnegative=True, **assumptions)
 
 # Type tags which are translated by declarevar() into ζSymbols
+Bool = "Bool"
 Int = "Int"
 Real = "Real"
 Complex = "Complex"
@@ -106,6 +107,9 @@ def declarevar(name, Type):
     else:
         assert isinstance(Type, str)
         assumptions = {
+            # There is no sympy boolean assumption, nor a type for Boolean symbols?
+            # Actually, Symbol inherits from sympy.logic.boolalg.Boolean
+            "Bool": '',
             "Int": 'integer',
             "Real": 'real',
             "Complex": 'complex',
@@ -177,3 +181,7 @@ lcm = sympy.Function('lcm')
 gcd = sympy.Function('gcd')
 
 mod = sympy.Mod
+
+# sympy.AppliedPredicates
+is_prime = Q.prime
+#Q.composite, Q.even, Q.odd, .positive, .rational, .square, .infinite, etc.

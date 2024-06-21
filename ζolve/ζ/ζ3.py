@@ -43,6 +43,17 @@ class SympyToZ3:
             #sympy.Symbol:  sympy_symbol_to_z3,
         }
 
+        self.predicate_translations = {
+            'prime':   lambda arg: Not(Exists([p, q], And(p > 1, q > 1, p * q == arg)))
+        }
+
+    def _prime_pred(self, _node, arg):
+        "Translate Q.prime(arg)"
+        p = FreshConst(IntSort())
+        q = FreshConst(IntSort())
+        return And(arg > 1, Not(Exists([p, q], And(p > 1, q > 1, p * q == arg))))
+
+
     def symbol_to_z3(self, sym: tyUnion[sympy.Symbol, sympy.Idx]) -> AstRef:
         # Both sympy and z3 allow multiple variables of the same name.
         # (Not to mention dummy variables).
@@ -58,7 +69,9 @@ class SympyToZ3:
 
         #print(f"symbol {sym} assump:: {sym.assumptions0}")
         assert sym.is_symbol   # Not is_Symbol; a Idx isn't
-        if sym.is_integer:
+        if sym.var_type == 'Bool':  # Custom prop
+            z3var = Bool(sym.name)
+        elif sym.is_integer:
             z3var = Int(sym.name)
         elif sym.is_rational:
             # Note Z3 doesn't have a RatSort, rationals are RealSort.
@@ -83,6 +96,9 @@ class SympyToZ3:
         if isinstance(node, sympy.Symbol):
             return self.symbol_to_z3(node)
 
+        args = node.args
+
+        trans = None
         if node.func in self.z3translations:
             trans = self.z3translations[node.func]
         elif isinstance(node, sympy.Integer):
@@ -94,12 +110,20 @@ class SympyToZ3:
         elif node in self.z3translations:
             # E.g. 'true' and 'false' objects.
             trans = self.z3translations[node]
-        else:
-            print(node, repr(node), type(node))
-            raise NotImplementedError
-        args = [self.to_z3(arg) for arg in node.args]
-        #print(f"TRANS {node.func}({node}, {args})")
+        elif isinstance(node, sympy.AppliedPredicate):
+            # A Q.something() expression
+            #print("PRED", node.function)
+            if node.function == sympy.Q.prime:
+                trans = self._prime_pred
+            if trans:
+                # The first arg to AppliedPredicate is the predicate, get rid of that
+                args = args[1:]
 
+        if trans is None:
+            print("to_z3 Unimplemented:", node, ", type =", type(node), ", func =", node.func)
+            raise NotImplementedError
+        args = [self.to_z3(arg) for arg in args]
+        #print(f"TRANS {node.func}({node}, {args})")
 
         # if isinstance(node, sympy.core.operations.AssocOp):
         #     if trans.__code__.co_argcount < 1 + len(args):
