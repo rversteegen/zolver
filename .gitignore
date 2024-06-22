@@ -1,5 +1,12 @@
 *~
 \#*\#
 __pycache__
+*.smt
+*.zip
 scrap
+translations
+translations2
+logs
+examples
+
 deepseek-new-baseline.ipynb

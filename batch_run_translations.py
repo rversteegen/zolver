@@ -10,7 +10,7 @@ import pandas as pd
 import sys
 import os
 sys.path.append("ζolve")
-from ζ import dsl_parse
+from ζ import dsl, dsl_parse
 
 INPUTDIR = "translations/new/"
 
@@ -66,7 +66,7 @@ def process_file(fname):
             #     print("uncaught except", e)
             #     stats.excepts += 1
 
-        except (SyntaxError, dsl_parse.DSLError) as e:
+        except (SyntaxError, dsl.DSLError) as e:
             print("--------------------------------------------------FAILED")
             print(e)
             line_err = ""

@@ -1,17 +1,15 @@
 #!/usr/bin/env python3
 
+import os
 import ζ.dsl_parse
 import ζ.util
 
 
-testfiles = [
-    "examples/is_prime.py",
-    "examples/min_multiarg_goal.py",
-    "examples/max_pylist_goal.py",
-    "examples/max_pyset_goal.py",
-    "invalid_examples/multiple_solns.py",
-    "invalid_examples/no_soln.py",
-]
+testfiles = []
+for dirpath, dirnames, filenames in os.walk('tests'):
+    for fname in filenames:
+        if fname.endswith('.py'):
+            testfiles.append(os.path.join(dirpath, fname))
 
 
 for testfile in testfiles:

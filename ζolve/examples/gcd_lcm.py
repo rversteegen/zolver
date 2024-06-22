@@ -6,10 +6,18 @@
 
 from importζ import *
 
-x = VariableX("x", integer = True)
-y = VariableX("y", integer = True)
+#x = VariableX("x", integer = True)
+#y = VariableX("y", integer = True)
 
-Eq(Gcd(x, y) * Lcm(x, y), 180)
+x = Symbol("x", integer = True)
+y = Symbol("y", integer = True)
 
-goal = Count(Gcd(x, y))
+
+add_constraint(Eq(gcd(x, y) * lcm(x, y), 180))
+
+goal_value = Symbol("y", integer = True)
+add_constraint(Eq(goal_value, gcd(x, y))
+add_constraint(
+gcd(x, y))
+goal = Count(goal_value)
 solve(goal)
