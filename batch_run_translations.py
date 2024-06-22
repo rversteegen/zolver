@@ -5,6 +5,7 @@ Parse and run translations saved in bulk.
 """
 
 from collections import defaultdict
+import random
 import pandas as pd
 import sys
 import os
@@ -15,8 +16,11 @@ INPUTDIR = "translations/new/"
 
 extracts = ""
 
+fails = []
+
 def process_file(fname):
     global extracts
+    global fails
 
     df = pd.read_csv(INPUTDIR + fname)
 
@@ -33,6 +37,7 @@ def process_file(fname):
          }, index = [fname])
 
     for idx in df.index:
+        correct = False
         row = df.loc[idx]
         #rint(row)
         print(f"\n\n\n###### Problem:\n{row.problem}\n\n###### Translation:\n{row.translation}\n")
@@ -45,27 +50,38 @@ def process_file(fname):
                 ans = workspace.solve()
                 print("********************************************************************************DONE")
                 stats.ran += 1
-                print("True answer is", row.answer, ans)
+                res_note = f"True answer is {row.answer} got {ans}"
+                print(res_note)
                 if row.answer == ans:
                     stats.correct += 1
+                    correct = True
                     extracts += "\n\n" + row.problem + "\n\n----->\n" + row.translation
                 else:
                     stats.wrong += 1
-            except NotImplementedError:
+            except NotImplementedError as e:
                 print("NotImplementedError")
                 stats.unimp += 1
-            except Exception as e:
-                print("uncaught except", e)
-                stats.excepts += 1
+                res_note = str(e)
+            # except Exception as e:
+            #     print("uncaught except", e)
+            #     stats.excepts += 1
 
         except (SyntaxError, dsl_parse.DSLError) as e:
             print("--------------------------------------------------FAILED")
             print(e)
+            line_err = ""
+            if e.lineno:
+                line_err = f"On line {e.lineno}: " + row.translation.split("\n")[e.lineno]
+                print(line_err)
             stats.failed += 1
-        except Exception as e:
-            print("uncaught except", e)
-            stats.failed += 1
-            stats.excepts += 1
+            res_note = str(e) + " " + line_err
+        # except Exception as e:
+        #     print("uncaught except", e)
+        #     stats.failed += 1
+        #     stats.excepts += 1
+
+        if not correct:
+            fails += [(row.problem, row.translation, res_note)]
 
 
     return stats
@@ -88,5 +104,11 @@ else:
         if fname.endswith('.csv'):
             stats = pd.concat([stats, process_file(fname)])
     print(stats)
+
+    random.shuffle(fails)
+    with open("translation_failures.txt", "w") as ofile:
+        for prob, trans, note in fails:
+            ofile.write("## PROBLEM\n" + prob + "\n\n## TRANS\n" + trans + "\n\nRESULT: " + note + "\n\n\n")
+
 
 #print(extracts)

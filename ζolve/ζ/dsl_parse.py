@@ -25,7 +25,9 @@ MB_LIMIT = 4000  # Minimum needed is about 185
 
 
 class DSLError(Exception):
-    pass
+    def __init__(self, msg, lineno = None):
+        self.lineno = lineno
+        super(DSLError, self).__init__(msg)
 
 
 ################################################################################
@@ -104,7 +106,9 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
     def visit_AnnAssign(self, node):
         """Convert 'x : Y' to 'variable("x", Y)' so we can record the variable name. Y can be any expression."""
         # TODO: Consider allowing "f(x) : Int" -> "f : Function([x.var_type], Int)"
-        assert isinstance(node.target, ast.Name)
+        # TODO: Also "a[1] : Int = 1", declare a sequence if doesn't exist and add constraint
+        if not isinstance(node.target, ast.Name):
+            raise DSLError("Only naked variable names can be type annotated,  Found: " + ast.unparse(node.target), self.lineno)
         ret = makeCall('declarevar', [ast.Constant(node.target.id), node.annotation], copyloc =  node)
         # The annotation is toplevel, so have to put into a Expr
         ret = ast.Expr(ret)
@@ -113,7 +117,7 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
 
 
 # Modified copy of sympy.parsing.ast_parser.parse_expr
-def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode = "eval"):
+def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode = "eval", lineno = 0):
     """
     Parses the string "string" and convert python expressions to SymPy expressions
     and handle ζ-specific DSL syntax, and then executes it!
@@ -123,6 +127,8 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
 
     It converts all numbers to Integers before feeding it to Python and
     <s>automatically creates Symbols</s>.
+
+    lineno should be 0-based!
     """
     try:
         a = ast.parse(string.strip(), mode=mode)
@@ -131,16 +137,18 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
     except SyntaxError as e:
         #raise sympy.SympifyError("Cannot parse %s." % repr(string))
         raise SyntaxError(f"{e}:  '{string}'")
-    a = ASTTransform(local_dict, global_dict).visit(a)
+    transformer = ASTTransform(local_dict, global_dict)
+    transformer.lineno = lineno
+    a = transformer.visit(a)
     if AST_DEBUG:
         print("REWRITTEN:\n", ast.dump(a, indent=4, include_attributes = True))
-    e = compile(a, "<string>", mode)
     try:
+        e = compile(a, "<string>", mode)
         with ζ.util.time_limit(SECONDS_LIMIT):
             with ζ.util.memory_limit(MB_LIMIT * 2**20):
                 return eval(e, global_dict, local_dict)
     except Exception as e:
-        raise DSLError(f"DSL script threw {type(e).__name__} '{str(e).strip()}'  on line  '{string}'")
+        raise DSLError(f"DSL script threw {type(e).__name__} '{str(e).strip()}'  on line  '{string}'", lineno)
 
 #parse_expr("  x : Point() >= 4\nprint(__annotations__)", {'Point': lambda p=3: 42}, global_namespace, mode = "exec")
 #parse_expr("x,y : int", {'Point': lambda p=3: 42}, global_namespace, mode = "exec")
@@ -222,7 +230,7 @@ def load_dsl(script, verbose = True):
 
     namespace = workspace.locals
 
-    for line in script.split('\n'):
+    for lineno, line in enumerate(script.split('\n')):
 
         # Remove comments
         line = line.split('#')[0]
@@ -285,7 +293,7 @@ def load_dsl(script, verbose = True):
 
         #res = sympy.parse_expr(line, namespace, transformations = transformations)
 
-        res = parse_and_eval_dsl(line, namespace, global_namespace, "exec")
+        res = parse_and_eval_dsl(line, namespace, global_namespace, "exec", lineno)
 
         if verbose: print(" eval->", res)
         #output.append(res)

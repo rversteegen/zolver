@@ -2,6 +2,7 @@ import sympy
 
 #from . import vector as vec
 #from ζ.vector import inf
+import ζ.dsl_parse
 import ζ.ζ3
 
 
@@ -24,6 +25,14 @@ class Workspace:
         Returns None if unsolved, a string if the formulation is bad
         ('unsat' if unsolvable, 'multiple' if not unique),
         or an int or float if solved."""
+        if self.goal is None:
+            raise ζ.dsl_parse.DSLError("goal is missing")
+        if isinstance(self.goal, (list, tuple)):
+            if len(self.goal) == 1:
+                self.goal = self.goal[0]
+            else:
+                raise ζ.dsl_parse.DSLError(f"goal should be a single expression, but got list of {len(self.goal)}")
+
         sol = ζ.ζ3.Z3Solver(goal = self.goal)
         # Not needed
         # for varname, var in variables.items():
