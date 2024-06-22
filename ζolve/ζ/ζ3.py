@@ -238,7 +238,7 @@ class Z3Solver():
         self.sol.add(self.trans.to_z3(spexp))
 
     def find_one_solution(self):
-        "Returns unsat->'unsat', unknown->None, sat->True and appends to self.solutions"
+        "Returns sat, unsat or unknown and appends to self.solutions"
         print("z3 solver =", self.sol)
         if len(self.solutions) == 0:
             # On the first run, try everything
@@ -248,21 +248,21 @@ class Z3Solver():
             self.try_sat(self.sol, 'nextsol')
             result = self._result
         if result == unsat:
-            return 'unsat'
+            return unsat
         if result == unknown:
             print("unknown_reason =", self.sol.unknown_reason())
-            return None
+            return unknown
         m = self.sol.model()
         print("z3 model() =", m)
-        result = m.eval(self.goal, model_completion = True)
+        soln = m.eval(self.goal, model_completion = True)
 
-        print(self.goal, " evaluated to ", result)
-        result = num_to_py(result)
-        assert result not in self.solutions
-        self.solutions.append(result)
+        print(self.goal, " evaluated to ", soln)
+        soln = num_to_py(soln)
+        assert soln not in self.solutions
+        self.solutions.append(soln)
         if self.objective is not None:
             print("solve(): objective range is ", self.objective.lower(), "to", self.objective.upper())
-        return True
+        return sat
 
     def find_next_solution(self):
         "Blocks the previous solution and calls find_one_solution"
@@ -281,20 +281,23 @@ class Z3Solver():
         #print("z3 solver =", self.sol)
         self.solutions = []
         ret = self.find_one_solution()
-        if ret is not True:
-            return ret
+        if ret == unsat:
+            return 'unsat'
+        if ret == unknown:
+            return None
 
         if self.objective is None:
             # goal isn't min/max, so check for unique solution
             ret = self.find_next_solution()
-            if ret:
+            if ret == sat:
                 return 'multiple'  # Not unique
-            if ret is None:
-                raise Exception("find_next_solution = unknown")
+            if ret == unknown:
+                # It's probably fine. TODO: should ideally warn the caller about it.
+                print("Warning: found one solution but couldn't prove it unique")
 
         return True
 
-    def have_quants(self):
+    def have_quants(self) -> bool:
         "Returns true if any constraints or the goal contain quantifiers"
         probe = Probe('has-quantifiers')
         g = Goal()
@@ -307,7 +310,7 @@ class Z3Solver():
         if probe(g):
             return True
 
-    def try_sat(self, solver, tag = '', timeout_ms = None):
+    def try_sat(self, solver, tag = '', timeout_ms = None) -> bool:
         "Run solver.check(), put result in self._result, return _result != unknown."
         if timeout_ms:
             solver.set('timeout', timeout_ms)  # Override global default
