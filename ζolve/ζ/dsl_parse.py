@@ -14,6 +14,7 @@ from sympy.parsing import sympy_parser as spparser
 from sympy.parsing.sympy_parser import TOKEN, DICT
 
 import ζ.dsl
+from ζ.dsl import DSLError
 import ζ.solver
 import ζ.util
 
@@ -23,11 +24,6 @@ exec('from ζ.dsl import *', global_namespace)
 SECONDS_LIMIT = 6
 MB_LIMIT = 4000  # Minimum needed is about 185
 
-
-class DSLError(Exception):
-    def __init__(self, msg, lineno = None):
-        self.lineno = lineno
-        super(DSLError, self).__init__(msg)
 
 
 ################################################################################

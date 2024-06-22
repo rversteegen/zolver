@@ -5,6 +5,7 @@ Variable types/declarations are handled here, and classes for some symbolic
 (unevaluated) expressions sympy doesn't provide.
 """
 
+import builtins
 import sympy
 from sympy import *
 #from types import FunctionType
@@ -13,6 +14,12 @@ from sympy.series.sequences import SeqBase
 # This global is replaced with a fresh Workspace every time dsl_parse.load() is called. It's only used
 # during the parsing a DSL script (which involves executing it).
 _ctx = None  # Workspace()
+
+
+class DSLError(Exception):
+    def __init__(self, msg, lineno = None):
+        self.lineno = lineno
+        super(DSLError, self).__init__(msg)
 
 
 ################################################################################
@@ -154,6 +161,22 @@ def goal(expr):
 ### Functions
 
 
+class VarargsFunction:
+    "Wrap sympy.Function(name) to allow lists and sets as args."
+    def __init__(self, name, minargs = 1):
+        self.func = sympy.Function(name)
+        self.minargs = minargs
+
+    def __call__(self, *args):
+        # We override 'set' (real clever)
+        if len(args) == 1 and isinstance(args[0], (builtins.list, builtins.tuple, builtins.set)):
+            # Python sets can be unpacked with * too
+            args = args[0]
+            print("unpack")
+        if len(args) < self.minargs:
+            raise TypeError(f"{name} expects at least {self.minargs} arg(s), was passed {len(args)}")
+        return self.func(*args)
+
 #def Element(el, ofset):
 
 Element = sympy.Function('Element')
@@ -161,7 +184,7 @@ Element = sympy.Function('Element')
 # TODO: these quantifier/set-operation functions should be python functions which check the args
 # and then return a sympy.Expr/Basic
 
-count = sympy.Function('Count')
+count = VarargsFunction('Count')
 
 set = sympy.Function('set')
 
@@ -173,14 +196,17 @@ def ForAll(*args):
 # if the expression doesn't contain the symbol it's returned.
 # sympy.Min/Max the min/max expressions. Interestingly if given an unevaluated constant expression
 # The min/max values of 
-min = sympy.Function('Minimum')
-max = sympy.Function('Maximum')
+min = VarargsFunction('Minimum')
+max = VarargsFunction('Maximum')
 
 # sympy lcm/gcd are not symbolic
-lcm = sympy.Function('lcm')
-gcd = sympy.Function('gcd')
+lcm = VarargsFunction('lcm', minargs = 2)
+gcd = VarargsFunction('gcd', minargs = 2)
 
 mod = sympy.Mod
+
+# Special for questions that ask for sum of numerator and denominator
+sum_num_denom = sympy.Function('sum_num_denom')  # Rational -> Int
 
 # sympy.AppliedPredicates
 is_prime = Q.prime

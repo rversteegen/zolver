@@ -6,6 +6,9 @@ import ζ.util
 
 testfiles = [
     "examples/is_prime.py",
+    "examples/min_multiarg_goal.py",
+    "examples/max_pylist_goal.py",
+    "examples/max_pyset_goal.py",
     "invalid_examples/multiple_solns.py",
     "invalid_examples/no_soln.py",
 ]
