@@ -6,6 +6,35 @@ from z3 import *
 import sympy
 from ζ import dsl
 
+class ItDispleasesζ3(ValueError):
+    "Not going to try to solve this instance."
+    pass
+
+
+set_param('timeout', 3000)  # ms
+set_param('memory_max_size', 700)  # MB  "hard upper limit for memory allocations"
+set_param('memory_high_watermark_mb', 700)  # MB  "high watermark for memory consumption"
+
+
+
+def minmax_of_values(exprs, opmethod, opname):
+    if len(exprs) == 1:
+        return exprs[0]
+    # This creates a 2^n blowup, so avoid it
+    if len(exprs) > 10:
+        raise ItDispleasesζ3(f"{opname} of {len(exprs)} is too many!")
+    ret = exprs[0]
+    for ex in exprs[1:]:
+        ret = If(getattr(ex, opmethod)(ret), ex, ret)  # Eg. If(ex >= ret, ex, ret) for Max
+    return ret
+
+def max_of_values(exprs):
+    "Return an expression for the maximum of a list of z3 expressions"
+    return minmax_of_values(exprs, '__ge__', 'Max')
+
+def min_of_values(exprs):
+    "Return an expression for the minimum of a list of z3 expressions"
+    return minmax_of_values(exprs, '__le__', 'Min')
 
 
 def num_to_py(ref: ArithRef):
@@ -78,6 +107,9 @@ class SympyToZ3:
             # Note Z3 doesn't have a RatSort, rationals are RealSort.
             z3var = Real(sym.name)
             # TODO, add rational constraint? Probably hardly matters
+        elif not sym.is_real:
+            assert sym.is_complex
+            raise NotImplementedError("Complex variable")
         else:
             assert sym.is_real
             # Assume real, but sympy doesn't assume a plain Symbol() is real
@@ -122,7 +154,7 @@ class SympyToZ3:
 
         if trans is None:
             print("to_z3 Unimplemented:", node, ", type =", type(node), ", func =", node.func)
-            raise NotImplementedError
+            raise NotImplementedError("translating " + str(node))
         args = [self.to_z3(arg) for arg in args]
         #print(f"TRANS {node.func}({node}, {args})")
 
@@ -132,6 +164,7 @@ class SympyToZ3:
         #         return functools.reduce(trans, [node] + args)
 
         return trans(node, *args)
+
 
 class CountSATPropagator(UserPropagateBase):
     def __init__(self, sol):
@@ -160,28 +193,31 @@ class CountSATPropagator(UserPropagateBase):
         self.counter += 1
         self.conflict([x for x, v in self.trail])
 
+
 class Z3Solver():
 
     goal: ExprRef
+    objective = None  # If not None, then using z3.Optimize()
+    solved_by = ''    # Name of the strategy that worked
 
-    def __init__(self, goal = None, max = None, min = None):
+    def __init__(self, goal):
         self.trans = SympyToZ3()
-        self.objective = None
         print("goal is", repr(goal))
         if isinstance(goal, dsl.max):  # in fact type(dsl.max(...)) == dsl.max !
-            assert len(goal.args) == 1
-            max = goal.args[0]
-        if isinstance(goal, dsl.min):
-            assert len(goal.args) == 1
-            min = goal.args[0]
-
-        if max is not None:
+            if len(goal.args) > 1:
+                args = [self.trans.to_z3(arg) for arg in goal.args]
+                self.goal = max_of_values(args)
+            else:
+                self.goal = self.trans.to_z3(goal.args[0])
             self.sol = Optimize()
-            self.goal = self.trans.to_z3(max)
             self.objective = self.sol.maximize(self.goal)
-        elif min is not None:
+        elif isinstance(goal, dsl.min):
+            if len(goal.args) > 1:
+                args = [self.trans.to_z3(arg) for arg in goal.args]
+                self.goal = min_of_values(args)
+            else:
+                self.goal = self.trans.to_z3(goal.args[0])
             self.sol = Optimize()
-            self.goal = self.trans.to_z3(min)
             self.objective = self.sol.minimize(self.goal)
         else:
             self.sol = Solver()
@@ -189,7 +225,7 @@ class Z3Solver():
             self.sol.set('max_memory', 500)
             # Also has an rlimit option, what does it do?
             self.goal = self.trans.to_z3(goal)
-        self.sol.set('timeout', 5000)  # ms
+        #self.sol.set('timeout', 3000)  # ms
 
     def set_goal(self, spexp: sympy.Expr):
         #if spexp.func == 
@@ -204,13 +240,17 @@ class Z3Solver():
     def find_one_solution(self):
         "Returns unsat->'unsat', unknown->None, sat->True and appends to self.solutions"
         print("z3 solver =", self.sol)
-        ctime = time.time()
-        result = self.sol.check()
-        ctime = time.time() - ctime
-        print(f"z3 check() = {result} in {1e3 * ctime :.1f}ms")
+        if len(self.solutions) == 0:
+            # On the first run, try everything
+            result = self.solve_strategies()
+        else:
+            # Thereafter just keep calling .check()
+            self.try_sat(self.sol, 'nextsol')
+            result = self._result
         if result == unsat:
             return 'unsat'
         if result == unknown:
+            print("unknown_reason =", self.sol.unknown_reason())
             return None
         m = self.sol.model()
         print("z3 model() =", m)
@@ -254,18 +294,101 @@ class Z3Solver():
 
         return True
 
-    # Unused
+    def have_quants(self):
+        "Returns true if any constraints or the goal contain quantifiers"
+        probe = Probe('has-quantifiers')
+        g = Goal()
+        g.add(self.sol.assertions())
+        if probe(g):
+            return True
+        # Trick to check the goal
+        g = Goal()
+        g.add(self.goal == 0)
+        if probe(g):
+            return True
 
-    def __solve2(self):
-        "Disable MBQI and use just E-matching"
+    def try_sat(self, solver, tag = '', timeout_ms = None):
+        "Run solver.check(), put result in self._result, return _result != unknown."
+        if timeout_ms:
+            solver.set('timeout', timeout_ms)  # Override global default
+        ctime = time.time()
+        self._result = solver.check()
+        ctime = time.time() - ctime
+        print(f"{tag} check() = {self._result} in {1e3 * ctime :.1f}ms")
+        if self._result == unknown:
+            print("unknown_reason =", solver.unknown_reason())
+            return False
+        if tag != 'nextsol':
+            self.solved_by = tag
+        return True
+
+    def optimize_strategies(self):
+        # TODO: use binary search next. Note that z3's optimizer not fast
+        # or as good as the SMT solver, and isn't incremental.
+        self.try_sat(self.sol, 'defaultopt')
+        return self._result
+
+    def solve_strategies(self):
+        "Equivalent to self.sol.check(), but try many strategies."
+
+        # "The solvers used for optimization are highly constrained and it isn't possible to use
+        # arbitrary tactics and still pose optimization queries. I am therefore not exposing ways to
+        # adapt optimization with tactics." --Nikolaj
+        # For that matter, the options are completely different too.
+        if isinstance(self.sol, Optimize):
+            return self.optimize_strategies()
+
+        if self.try_sat(self.sol, 'default'): return self._result
+
+        if self.have_quants():
+            # See https://microsoft.github.io/z3guide/docs/logic/Quantifiers
+            # The smt.macro-finder option is very effective when there are
+            # assertions of the form:  forall x. p(x) = ....   (meaning Iff)
+            self.sol.set('smt.macro-finder', True)  # fixme: should be just 'smt.macro-finder'?
+
+            # I notice:
+            #quasi_macros (bool, default false): tries to find and apply universally quantified
+            #  formulas that are quasi-macros: defining a function symbol that has more arguments
+            #  than the number of ∀ bound variables. The additional arguments are functions of the
+            #  bound variables, eg:  forall([x, y], f(x, y, 1) == 2*x*y)
+            #'quasi-macro-finder' is also a Tactic
+            self.sol.set('quasi-macros', True)
+
+            # "The Z3 model finder is more effective if the input formula does
+            # not contain nested quantifiers. If that is not the case for your
+            # formula, you can use the option:"
+            self.sol.set('smt.pull-nested-quantifiers', True)
+
+            if self.try_sat(self.sol, 'macros'): return self._result
+
+            # Try to use elim-predicates which is not currently [2023] used in standard preprocessing
+            #sol = Then('simplify', 'elim-predicates', 'smt').solver()
+            #sol.set('timeout', 3000)  # ms
+
+            # Useful solver for various quantified fragments
+            #self.sol = Tactic('qsat').solver()
+
+
+        # Disable MBQI and use just E-matching
         self.sol.set('smt.autoconf', False)  # ???
         self.sol.set('smt.mbqi', False)
+        self.sol.set('smt.ematching', True)
+        if self.try_sat(self.sol, 'ematching'): return self._result
 
-    def __qsat_solver(self):
-        "Useful solver for various quantified fragments"
-        self.sol = Tactic('qsat').solver()
+        # Disable E-matching, just MBQI
+        # If E-matching does't know a formula is finite domain
+        # it can loop forever "creating a cascading set of instances"
+        self.sol.set('smt.mbqi', True)
+        self.sol.set('smt.ematching', False)
+        if self.try_sat(self.sol, 'mbqi'): return self._result
 
+        # Tactic('elim-term-ite') "Eliminate term if-then-else by adding new fresh auxiliary
+        # variables" may be useful if using If to encode Min/Max.
+        #sol = Then('simplify', 'elim-predicates', 'elim-term-ite', 'smt').solver
 
+        # Maybe run nlsat specifically, with set('check_lemmas', True) (recursively run nlsat)
+
+        return unknown
 
 
 if __name__ == '__main__':

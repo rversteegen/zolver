@@ -40,7 +40,9 @@ class Workspace:
         for fact in self.facts:
             sol.add_constraint(fact)
         ret = sol.solve()
-        if ret is True: # solved
+        if ret is not None:
+            print("resolved by ζ3:" + sol.solved_by)
+        if ret is True:  # solved
             return sol.solutions[0]
         return ret  # None, 'unsat', 'multiple'
 
