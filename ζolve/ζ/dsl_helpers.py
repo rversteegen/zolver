@@ -1,4 +1,5 @@
 import sympy
+import ζ.dsl
 
 """
 Helper functions used in dsl.py but which don't want to live in that pollution.
@@ -76,3 +77,53 @@ class VarargsFunction:
             raise TypeError(f"{name} expects at least {self.minargs} arg(s), was passed {len(args)}")
         return self.func(*args)
 
+
+def ast_to_sympy(astnode):
+    "Replace our sympy overrides with the sympy versions"
+
+    # Don't use sympy's gcd/lcm, they treat args containing symbols as polynomials, so gcd(x, 42) == 1
+
+
+def wrap_sympy_solve(*args, **kwargs):
+    "Probably meant to call sympy.solve. Let's try it!"
+    constraints = args[0]
+    if not isinstance(constraints, (list, tuple)):
+        constraints = [constraints]
+
+    symbols = args[1:]
+    # sympy.solve() oh so flexible
+    if len(symbols) == 1 and isinstance(symbols[0], (list, tuple)):
+        symbols = symbols[0]
+    if len(symbols) == 0:
+        # Taken from sympy.solve()
+        symbols = list(set().union(*[fi.free_symbols for fi in constraints]))
+    if len(symbols) > 1:
+        # We won't know what to do with an assignment to multiple variables
+        raise TypeError("solve(): multiple symbols were given to solve for, can't produce a single value")
+    symbol = symbols[0]
+
+    try:
+        print("dsl.solve: attempting sympy.solve!")
+        res = sympy.solve(constraints, symbol, dict=True, **kwargs)
+        print(" solve returned", res)
+        # Expect the result to be a list of dicts, eg
+        # solve(x**2 - y, [y], dict=True)
+        #  -> [{y: x**2}]
+        solutionset = [soln[symbol] for soln in res]
+        if len(solutionset) == 1:
+            return solutionset[0]
+        if len(solutionset) > 1:
+            return solutionset   # TODO, convert into a set object?
+        # Otherwise sympy failed
+
+    except Exception as e:
+        print(f"dsl.solve(): sympy.solve({args}, **{kwargs}) failed: {e}")
+    # Doesn't work. We could either tell the user to fix it,
+    # or split up solve(constraints, symbol).
+    # Need to convert non-relationals to Eq(0)
+    for cons in constraints:
+        if cons.func != sympy.Eq:
+            cons = sympy.Eq(cons, 0)
+        print("dsl.solve: converted to constraint:", cons)
+        ζ.dsl.constraint(cons) # dsl
+    return symbol

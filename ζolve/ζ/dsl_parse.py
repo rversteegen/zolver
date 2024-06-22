@@ -132,7 +132,11 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
             print("ast.parse result: ", ast.dump(a, indent=4, include_attributes = True))
     except SyntaxError as e:
         #raise sympy.SympifyError("Cannot parse %s." % repr(string))
-        raise SyntaxError(f"{e}:  '{string}'")
+        e.lineno = None  # It's garbage, and would end up in the printed message
+        e.filename = None  # ditto
+        ex = SyntaxError(f"{e}, line {lineno}:  '{string}'")
+        ex.lineno = lineno
+        raise ex
     transformer = ASTTransform(local_dict, global_dict)
     transformer.lineno = lineno
     a = transformer.visit(a)

@@ -144,3 +144,5 @@ sum_num_denom = sympy.Function('sum_num_denom')  # Rational -> Int
 # sympy.AppliedPredicates
 is_prime = Q.prime
 #Q.composite, Q.even, Q.odd, .positive, .rational, .square, .infinite, etc.
+
+solve = wrap_sympy_solve
