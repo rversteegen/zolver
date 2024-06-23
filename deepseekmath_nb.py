@@ -36,7 +36,7 @@ import os
 
 import time
 NOTEBOOK_START_TIME = time.time()
-import torch
+
 
 if os.getenv('KAGGLE_IS_COMPETITION_RERUN'):
     PRIVATE = True
@@ -56,15 +56,18 @@ if PRIVATE:
 OLDCODE = False  # Original code runner
 TB = True # Show traceback, OLDCODE=False only
 ASK_CONFIDENCE = False  # "Is it proven?"
-P100 = (torch.cuda.device_count() == 1)
 SINGLE_GPU = False   # Just 1xT4
 QUANT = False
+if QUANT:  #Fits on one device
+    SINGLE_GPU = True
+
+
 USE_PAST_KEY = True
 SEED = 317
 MODEL_PATH = "/kaggle/input/deepseek-math"
 LLEMMA = False   # LLEMMA tokenizer
 RELOAD_MODEL = False   # For interactive run-all
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+DEVICE = 'cuda' #if torch.cuda.is_available() else 'cpu'
 N_REPETITIONS = 10 if VALIDATE else (20 if SLOW else 1)   # 6
 MAX_SINGLE_GEN_TOKENS = 1800 if VLLM else 2048
 MAX_GEN_TOKENS = 2048 if SLOW else 500  #CHANGE
@@ -84,6 +87,22 @@ else:
     NPROBS = 1  #10
     TIME_LIMIT = 450
     
+
+# %%
+if VLLM:
+    %env MAX_JOBS = 4
+    !pip uninstall -q -y torch
+    !pip install -q -U --no-index --find-links=/kaggle/input/vllm-whl -U vllm
+    #!pip install -U /kaggle/input/bitsandbytes-0-42-0-py3-none-any-whl/bitsandbytes-0.42.0-py3-none-any.whl
+    !pip install -q -U --upgrade /kaggle/input/vllm-t4-fix/grpcio-1.62.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
+    !pip install -q -U --upgrade /kaggle/input/vllm-t4-fix/ray-2.11.0-cp310-cp310-manylinux2014_x86_64.whl
+
+# %%
+import torch
+P100 = (torch.cuda.device_count() == 1)
+if P100:
+    SINGLE_GPU = True
+
 LOG_TAG = ""
 if FIRSTPROB:
     LOG_TAG += f"{FIRSTPROB}-{FIRSTPROB + NPROBS}"
@@ -103,25 +122,18 @@ LOG_NAME = time.strftime("%Y%m%d-%H%M-") + LOG_TAG + ".csv"
 print(f"P100={P100}, DEVICE={DEVICE}, QUANT={QUANT}, SLOW={SLOW}")
 print(LOG_NAME)
 
-
 # %% [markdown]
 # # Install and import libraries, aimo/dummy module
 
 # %% _kg_hide-input=true
 %%time
-if QUANT and not 'installed_libs' in globals():
+if (VLLM or QUANT) and not 'installed_libs' in globals():
     # Need more recent accelerate
     !pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
     !pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
     installed_libs = True
     
-if VLLM:
-    %env MAX_JOBS = 4
-    !pip uninstall -q -y torch
-    !pip install -q -U --no-index --find-links=/kaggle/input/vllm-whl -U vllm
-    #!pip install -U /kaggle/input/bitsandbytes-0-42-0-py3-none-any-whl/bitsandbytes-0.42.0-py3-none-any.whl
-    !pip install -q -U --upgrade /kaggle/input/vllm-t4-fix/grpcio-1.62.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
-    !pip install -q -U --upgrade /kaggle/input/vllm-t4-fix/ray-2.11.0-cp310-cp310-manylinux2014_x86_64.whl
+
 
 # %%
 import os
@@ -140,6 +152,7 @@ from collections import Counter
 import torch
 import transformers
 import accelerate
+from torch import multiprocessing
 if VLLM:
     from vllm import LLM, SamplingParams
 
@@ -439,7 +452,7 @@ def cpu_time() -> str:
     processt = time.clock_gettime(time.CLOCK_PROCESS_CPUTIME_ID)
     return f"{threadt:.1f}/{processt:.1f}s CPU"
 
-def show_model_mem(m):
+def show_model_mem(model):
     class MemUse: params, bufs = 0, 0
     counts = defaultdict(MemUse)
     for buf in model.parameters():
@@ -480,81 +493,86 @@ def nvidia_pstate() -> str:
 # %%
 %%time
 transformers.set_seed(SEED)
+#multiprocessing.set_start_method("spawn")
 
-model_kwargs = {}
 
-if QUANT == 4:
-    model_kwargs['quantization_config'] = transformers.BitsAndBytesConfig(
-        load_in_4bit = True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.bfloat16,
-        bnb_4bit_use_double_quant=False,  #True would save additional 0.4bits per param
-    )
-if QUANT == 8:
-    model_kwargs['quantization_config'] = transformers.BitsAndBytesConfig(
-        load_in_8bit = True,
-    )
-    
-if VLLM:
-    model = LLM(model=MODEL_PATH, 
-          tokenizer=MODEL_PATH,
-          dtype="half",
-          tensor_parallel_size=2,
-          max_model_len=4096,
-          enforce_eager=True,
-          gpu_memory_utilization=0.95,
-          trust_remote_code=True,
-          #swap_size=7,
-          seed=SEED)
-    
-else:
+def load_model(MODEL_PATH):
+    model_kwargs = {}
 
-    config = transformers.AutoConfig.from_pretrained(MODEL_PATH)
-
-    tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_PATH)
-
-    config.gradient_checkpointing = True # Enable gradient checkpointing for memory optimization
-    config.pad_token_id = tokenizer.pad_token_id
-
-    LAYERS_GPU0 = 32 if P100 else 15
-    device_map = [('model.embed_tokens', 0)] + [(f'model.layers.{i}', 0 if i < LAYERS_GPU0 else 1) for i in range(0, 31 + 1)] + [
-                     ('model.norm', 1),
-                     ('lm_head', 1)]
-    device_map = {ii:jj for (ii,jj) in device_map}
-
-    if P100 or QUANT:  #Fits on one device
-        SINGLE_GPU = True
-
-    if SINGLE_GPU:
-        #model_kwargs['device_map'] = "auto"
-        model_kwargs['device_map'] = "sequential"
-        #model_kwargs['device_map'] = device_map
-    else:
-        model_kwargs['device_map'] = device_map
-
-    if not 'model' in globals() or RELOAD_MODEL:
-        model = None
-        gc.collect()
-        torch.cuda.empty_cache()
-        model = transformers.AutoModelForCausalLM.from_pretrained(
-            MODEL_PATH,
-            torch_dtype="auto",
-            #use_flash_attention_2=True,
-            trust_remote_code=True,
-            config=config,
-            **model_kwargs
+    if QUANT == 4:
+        model_kwargs['quantization_config'] = transformers.BitsAndBytesConfig(
+            load_in_4bit = True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=False,  #True would save additional 0.4bits per param
+        )
+    if QUANT == 8:
+        model_kwargs['quantization_config'] = transformers.BitsAndBytesConfig(
+            load_in_8bit = True,
         )
 
-    # Disable memory-efficient sparse tensors for CUDA operations
-    torch.backends.cuda.enable_mem_efficient_sdp(False)
 
-    #print(model)
-    print()
-    print("Model", MODEL_PATH)
-    print("dtype", model.dtype, model.hf_device_map)
+    if VLLM:
+        model = LLM(model=MODEL_PATH, 
+              tokenizer=MODEL_PATH,
+              dtype="half",
+              tensor_parallel_size=2,
+              max_model_len=4096,
+              enforce_eager=True,
+              gpu_memory_utilization=0.95,
+              trust_remote_code=True,
+              #swap_size=7,
+              seed=SEED)
 
-    show_model_mem(model)
-    
+        return model
+    else:
+
+        config = transformers.AutoConfig.from_pretrained(MODEL_PATH)
+
+        tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_PATH)
+
+        config.gradient_checkpointing = True # Enable gradient checkpointing for memory optimization
+        config.pad_token_id = tokenizer.pad_token_id
+
+        LAYERS_GPU0 = 32 if P100 else 15
+        device_map = [('model.embed_tokens', 0)] + [(f'model.layers.{i}', 0 if i < LAYERS_GPU0 else 1) for i in range(0, 31 + 1)] + [
+                         ('model.norm', 1),
+                         ('lm_head', 1)]
+        device_map = {ii:jj for (ii,jj) in device_map}
+
+        if SINGLE_GPU:
+            #model_kwargs['device_map'] = "auto"
+            model_kwargs['device_map'] = "cuda:0" #"sequential"
+            #model_kwargs['device_map'] = device_map
+        else:
+            model_kwargs['device_map'] = device_map
+
+        if not 'model' in globals() or RELOAD_MODEL:
+            model = None
+            gc.collect()
+            torch.cuda.empty_cache()
+            model = transformers.AutoModelForCausalLM.from_pretrained(
+                MODEL_PATH,
+                torch_dtype="auto",
+                #use_flash_attention_2=True,
+                trust_remote_code=True,
+                config=config,
+                **model_kwargs
+            )
+
+        # Disable memory-efficient sparse tensors for CUDA operations
+        torch.backends.cuda.enable_mem_efficient_sdp(False)
+
+        #print(model)
+        print()
+        print("Model", MODEL_PATH)
+        print("dtype", model.dtype, model.hf_device_map)
+
+        show_model_mem(model)
+        return model, tokenizer
+
+model, tokenizer = load_model(MODEL_PATH)
+        
 show_gpu_mem()
 
 
