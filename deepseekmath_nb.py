@@ -60,7 +60,7 @@ P100 = (torch.cuda.device_count() == 1)
 SINGLE_GPU = False   # Just 1xT4
 QUANT = False
 USE_PAST_KEY = True
-SEED = 315
+SEED = 317
 MODEL_PATH = "/kaggle/input/deepseek-math"
 LLEMMA = False   # LLEMMA tokenizer
 RELOAD_MODEL = False   # For interactive run-all
@@ -857,7 +857,8 @@ prompt_options = [elab0tool, tool0, steps1]  # 15, 17, ?19
 prompt_options = [compute0, elab0tool] 
 prompt_options = [compute0, tool0, analy2] # 16
 prompt_options = [compute0, tool0, tool1, steps1, analy2]  #, elab0tool, ]
-prompt_options = [tool1, analy2] # 21, X16
+prompt_options = [tool1, analy2] # 21, 17, X16
+prompt_options = [tool1,elab0tool]
 #prompt_options = [tool1, analy2, compute0]
 
 # %% [markdown]
@@ -1153,6 +1154,11 @@ def predict(probi, problem):
     time_for_item = time_left / max(1, NPROBS - probi)
     item_time_start = time.time()
     for jj in range(N_REPETITIONS): # tqdm(range(N_REPETITIONS)):
+        
+        
+        temperature = 0.9 * (0.3+0.25*jj) / (0.25*jj + 1)  # 0.27 0.40 0.48 0.54 0.59 0.62 0.65...
+        temperature_coding = temperature
+        
         it_start_time = time.time()
         time_spent = time.time() - NOTEBOOK_START_TIME
         spent_this_prob = (time.time() - item_time_start)
