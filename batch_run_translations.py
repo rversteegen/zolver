@@ -10,9 +10,9 @@ import pandas as pd
 import sys
 import os
 sys.path.append("ζolve")
-from ζ import dsl, dsl_parse
+from ζ import dsl, dsl_parse, ζ3, solver
 
-INPUTDIR = "translations/new/"
+INPUTDIR = "translations/"
 
 extracts = ""
 
@@ -26,58 +26,77 @@ def process_file(fname):
 
     stats = pd.DataFrame(
         {
-         'total': len(df),
-         'parsed': 0,
-         'failed': 0,
-         'ran': 0,
-         'wrong': 0,
-         'correct': 0,
-         'unimp': 0,
-         'excepts': 0,
-         }, index = [fname])
+            'total': len(df),
+            'parsed': 0,
+            'parsefailed': 0,
+            'solvefailed': 0,
+            'solve_ran': 0,
+            'trivial': 0,
+            'trivialcorrect': 0,
+            'trivialwrong': 0,
+            'wrong': 0,
+            'correct': 0,
+            'unimp': 0,
+            'unsat': 0,
+            'unknown': 0,
+            'excepts': 0,
+        }, index = [fname])
 
     for idx in df.index:
         correct = False
         row = df.loc[idx]
-        #rint(row)
-        print(f"\n\n\n###### Problem:\n{row.problem}\n\n###### Translation:\n{row.translation}\n")
+        print("********************************************************************************")
+        print(f"\n\n\n###### Problem {row.prob_name}:\n{row.problem}\n\n###### Translation:\n{row.translation}\n")
         try:
             workspace = dsl_parse.load_dsl(row.translation, verbose = False)
-            print("--------------------------------------------******SUCCESS")
+            print("PARSE SUCCESS")
             workspace.print()
             stats.parsed += 1
+            if workspace.goal is not None and workspace.goal.is_constant:
+                stats.trivial += 1
             try:
-                ans = workspace.solve()
-                print("********************************************************************************DONE")
-                stats.ran += 1
-                res_note = f"True answer is {row.answer} got {ans}"
+                res = workspace.solve()
+                stats.solve_ran += 1
+                res_note = f"Result {res}, true answer is {row.answer} got {workspace.solution}"
+                print("--------------RESULT")
                 print(res_note)
-                if row.answer == ans:
-                    stats.correct += 1
-                    correct = True
-                    extracts += "\n\n" + row.problem + "\n\n----->\n" + row.translation
+                if res == solver.unknown:
+                    stats.unknown += 1
+                elif res == solver.unsat or res == solver.notunique:
+                    stats.unsat += 1
                 else:
-                    stats.wrong += 1
-            except NotImplementedError as e:
-                print("NotImplementedError")
-                stats.unimp += 1
-                res_note = str(e)
-            # except Exception as e:
-            #     print("uncaught except", e)
-            #     stats.excepts += 1
+                    assert res == solver.solved
+                    if row.answer == workspace.solution:
+                        stats.correct += 1
+                        correct = True
+                        if workspace.goal.is_constant:
+                            stats.trivialcorrect += 1
+                        extracts += "\n\n" + row.problem + "\n\n----->\n" + row.translation
+                    else:
+                        stats.wrong += 1
+                        if workspace.goal.is_constant:
+                            stats.trivialwrong += 1
 
-        except (SyntaxError, dsl.DSLError) as e:
-            print("--------------------------------------------------FAILED")
+            except NotImplementedError as e:
+                print("---------------SOLVE FAILED: NotImplementedError")
+                stats.unimp += 1
+                stats.solvefailed += 1
+                res_note = str(e)
+            except (SyntaxError, dsl.DSLError, ζ3.MalformedError) as e:
+                print("---------------SOLVE FAILED")
+                stats.solvefailed += 1
+
+        except (SyntaxError, dsl.DSLError, ζ3.MalformedError) as e:
+            print("---------------PARSE FAILED")
             print(e)
             line_err = ""
             if e.lineno:
                 line_err = f"On line {e.lineno}: " + row.translation.split("\n")[e.lineno]
                 print(line_err)
-            stats.failed += 1
+            stats.parsefailed += 1
             res_note = str(e) + " " + line_err
         # except Exception as e:
         #     print("uncaught except", e)
-        #     stats.failed += 1
         #     stats.excepts += 1
 
         if not correct:
@@ -96,7 +115,6 @@ if False:
     stats = process_file(fname)
     print(stats)
     stats = stats.iloc[0]
-    print(f"{fname}:\t solved {stats.correct}, wrong {stats.wrong}, {stats.ran} parsed+ran, {stats.parsed} parsed and {stats.failed} failed to parse of {stats.total} total; {stats.excepts} unexpected exceptions\n")
 
 else:
     stats = pd.DataFrame()
@@ -110,5 +128,27 @@ else:
         for prob, trans, note in fails:
             ofile.write("## PROBLEM\n" + prob + "\n\n## TRANS\n" + trans + "\n\nRESULT: " + note + "\n\n\n")
 
+#print(f"{fname}:\t solved {stats.correct}, wrong {stats.wrong}, {stats.solve_ran} parsed+ran, {stats.parsed} parsed and {stats.parsefailed} failed to parse of {stats.total} total; {stats.excepts} unexpected exceptions\n")
+
+tally = stats.sum()
+
+print(f"""
+
+
+Total: {tally.total}
+-- Parsed: {tally.parsed}
+---- /Trivial: {tally.trivial}  (trivial goal)
+---- solve finished: {tally.solve_ran}
+----   Correct: {tally.correct}
+----     Trivial: {tally.trivialcorrect}
+----   Wrong: {tally.wrong}
+----     Trivial: {tally.trivialwrong}
+----   Unsat: {tally.unsat}  (inc notunique)
+----   Unknown: {tally.unknown}
+---- solve failed:  {tally.solvefailed}
+------ Notimp:  {tally.unimp}
+-- Malformed: {tally.parsefailed}
+-- Uncaught except: {tally.excepts}
+""")
 
 #print(extracts)

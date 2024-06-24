@@ -13,7 +13,7 @@ import sympy.parsing.ast_parser
 from sympy.parsing import sympy_parser as spparser
 from sympy.parsing.sympy_parser import TOKEN, DICT
 
-import ζ.dsl
+from ζ import dsl
 from ζ.dsl import DSLError
 import ζ.solver
 import ζ.util
@@ -40,6 +40,20 @@ def makeCall(name, args = [], keywords = [], copyloc = None):
 
 
 class ASTTransform(sympy.parsing.ast_parser.Transform):
+
+    # def visit_Constant(self, node):
+    #     print("-=-------- CONST", ast.dump(node))
+    #     if node.value is True:
+    #         return 
+    #     if isinstance(node.value, int):
+    #         return ast.fix_missing_locations(ast.Call(func=ast.Name('Integer', ast.Load()),
+    #                 args=[node], keywords=[]))
+    #     elif isinstance(node.value, float):
+    #         return ast.fix_missing_locations(ast.Call(func=ast.Name('Float', ast.Load()),
+    #                 args=[node], keywords=[]))
+    #     return node
+
+
     def visit_Name(self, node):
         "Modified version of Transform.visit_Name to remove auto-Symbol'ing"
         if node.id in self.local_dict:
@@ -50,6 +64,7 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
             if isinstance(name_obj, (sympy.Basic, type)) or callable(name_obj):
                 return node
         elif node.id in ['True', 'False']:
+            print("-=-------- PARSE", node)
             return node
         #return ast.fix_missing_locations(
         #    ast.Call(func=ast.Name('Symbol', ast.Load()),
@@ -127,9 +142,18 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
     lineno should be 0-based!
     """
     try:
-        a = ast.parse(string.strip(), mode=mode)
+        # Try to parse as an expression first, then a statement
+        try:
+            a = ast.parse(string.strip(), mode='eval')#mode)
+            mode = 'eval'
+        except SyntaxError:
+            if mode == 'exec':
+                a = ast.parse(string.strip(), mode=mode)#mode)
+            else:
+                raise
+        #print("ast.parse: used mode", mode)
         if AST_DEBUG:
-            print("ast.parse result: ", ast.dump(a, indent=4, include_attributes = True))
+            print(f"ast.parse(mode={mode}) result: ", ast.dump(a, indent=4, include_attributes = True))
     except SyntaxError as e:
         #raise sympy.SympifyError("Cannot parse %s." % repr(string))
         e.lineno = None  # It's garbage, and would end up in the printed message
@@ -146,7 +170,10 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
         e = compile(a, "<string>", mode)
         with ζ.util.time_limit(SECONDS_LIMIT):
             with ζ.util.memory_limit(MB_LIMIT * 2**20):
-                return eval(e, global_dict, local_dict)
+                print(mode.upper(),  ast.dump(a))
+                ret =  eval(e, global_dict, local_dict)
+                print("GOT", ret)
+                return ret
     except Exception as e:
         raise DSLError(f"DSL script threw {type(e).__name__} '{str(e).strip()}'  on line  '{string}'", lineno)
 
@@ -264,9 +291,13 @@ def load_dsl(script, verbose = True):
             namespace[var.name] = var
             continue
 
-        line = re.sub('goal\s*=\s*(.*)$', 'goal(\\1)', line)
+        line = re.sub('^goal\s*=\s*(.*)$', 'goal(\\1)', line)  # obsolete form
+        line = re.sub('^answer\s*=\s*(.*)$', 'goal(\\1)', line)
 
-        if verbose: print(f"LINE: {repr(line)}")
+        # sympy's constants have kind == BooleanKind
+        line = line.replace('True', 'true').replace('False', 'false')
+
+        if verbose: print(f"LINE::::: {repr(line)}")
 
         # Parse the func
 
@@ -296,7 +327,19 @@ def load_dsl(script, verbose = True):
         res = parse_and_eval_dsl(line, namespace, global_namespace, "exec", lineno)
 
         if verbose: print(" eval->", res)
+
+        # If it's a boolean, make it a constraint
+
+        if hasattr(res, 'kind') and res.kind == dsl.BooleanKind:
+            print("Convert boolean to constraint!")
+            dsl.constraint(res)
+
         #output.append(res)
+
+    print("FINISH_PARSE:::")
+    # Check the goal
+    workspace.finish_parse()
+    print("PARSE DONE ::::::")
 
     return workspace
 
@@ -354,11 +397,20 @@ ForAll([i], i in S, (i in {2, 4, 6, 7} and (i[i-1] in S and i[i-1] < i)))
 goal = count(S)
 """
 
+    intext = """
+    c: bool
+    #b = max(c, 2, 3)
+    b = divides(4, 16)
+    Iff(c, b)
+    print("KIND", b, type(b), repr(b), b.kind)
+    goal = If(If(c, False, 5 > 1), 4, 5)
+    """
+
     workspace = load_dsl(intext)
     workspace.print()
 
     if False:
         print(sympy.solve(workspace.facts, [workspace.goal]))
     else:
-        workspace.solve()
+        workspace.print_solve()
 

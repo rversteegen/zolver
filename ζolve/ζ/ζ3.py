@@ -6,35 +6,63 @@ from z3 import *
 import sympy
 from ζ import dsl
 
+# Alternative to sat/unsat/unknown
+solved = "solved"
+notunique = "notunique"
+malformed = "malformed"  # The problem is syntactically invalid
+
+def clean_sat(val):
+    """There can be many CheckSatResults which are equal but aren't the same value!"""
+    for canonical in (sat, unsat, unknown):
+        if val == canonical:
+            return canonical
+    return val
+
+oo = sympy.oo
+
+
+class MalformedError(ValueError):
+    "Constraints/goals are not correctly formed"
+    lineno = None
+    pass
+
 class ItDispleasesζ3(ValueError):
     "Not going to try to solve this instance."
+    lineno = None
     pass
 
 
-set_param('timeout', 3000)  # ms
+set_param('timeout', 120000)  # ms
 set_param('memory_max_size', 700)  # MB  "hard upper limit for memory allocations"
 set_param('memory_high_watermark_mb', 700)  # MB  "high watermark for memory consumption"
 
 
 
-def minmax_of_values(exprs, opmethod, opname):
+def minmax_of_values(exprs, opmethod, opname, funcname):
     if len(exprs) == 1:
         return exprs[0]
     # This creates a 2^n blowup, so avoid it
     if len(exprs) > 10:
-        raise ItDispleasesζ3(f"{opname} of {len(exprs)} is too many!")
+        raise ItDispleasesζ3(f"{funcname} of {len(exprs)} is too many!")
+    print("minmax_of_values: expresions are", [repr(e) for e in exprs])
+    # WARNING: z3 might be able to solve this, but after converting to smt with .sexp() it becomes unsolvable,
+    # must lose identity information! Shows this is a bad formulation.
     ret = exprs[0]
     for ex in exprs[1:]:
-        ret = If(getattr(ex, opmethod)(ret), ex, ret)  # Eg. If(ex >= ret, ex, ret) for Max
+        cond = getattr(ex, opmethod)(ret)
+        if cond is NotImplemented:
+            # Probably trying to compare a boolean, eg "min(x, x < y)"
+            raise MalformedError(f"Invalid comparison ({ex}) {opname} ({ret})")
+        ret = If(cond, ex, ret)  # Eg. If(ex >= ret, ex, ret) for Max
     return ret
 
 def max_of_values(exprs):
     "Return an expression for the maximum of a list of z3 expressions"
-    return minmax_of_values(exprs, '__ge__', 'Max')
+    return minmax_of_values(exprs, '__ge__', '>=', 'Max')
 
 def min_of_values(exprs):
     "Return an expression for the minimum of a list of z3 expressions"
-    return minmax_of_values(exprs, '__le__', 'Min')
+    return minmax_of_values(exprs, '__le__', '<=', 'Min')
 
 
 def num_to_py(ref: ArithRef):
@@ -64,6 +92,11 @@ class SympyToZ3:
             sympy.Gt:          lambda node, lhs, rhs:  lhs >  rhs,
             sympy.Pow:         lambda node, lhs, rhs:  lhs ** rhs,  # 1/z is sympy.Pow(z, -1), x/y is Mul
             #sympy.Pow:     self.pow_to_z3,
+            sympy.Abs:         lambda node, arg:  If(arg < 0, -arg, arg),
+
+            dsl.If:            lambda node, C, T, E:  If(C, T, E),
+
+
             sympy.Integer:     lambda node:  IntVal(node.p),
             sympy.Rational:    lambda node:  RatVal(node.p, node.q),  # has sort Real
             # RealVal converts arg to a string anyway, which cleans away rounding errors so Z3 can convert to a rational like 1/5.
@@ -99,6 +132,9 @@ class SympyToZ3:
 
         #print(f"symbol {sym} assump:: {sym.assumptions0}")
         assert sym.is_symbol   # Not is_Symbol; a Idx isn't
+        #assert sym.kind == sympy.core.NumberKind
+        #dsl.assert_number_kind(sym, "Variable " + str(sym))
+
         if sym.var_type == 'Bool':  # Custom prop
             z3var = Bool(sym.name)
         elif sym.is_integer:
@@ -199,11 +235,13 @@ class Z3Solver():
     goal: ExprRef
     objective = None  # If not None, then using z3.Optimize()
     solved_by = ''    # Name of the strategy that worked
+    solution = None
+    solution_attained = False  # For Optimizer(), whether can reach the limit, not just inf/sup
 
     def __init__(self, goal):
         self.trans = SympyToZ3()
         print("goal is", repr(goal))
-        if isinstance(goal, dsl.max.func):  # in fact type(dsl.max(...)) == dsl.max !
+        if isinstance(goal, dsl._maxfuncs):  # in fact type(dsl.max(...)) == dsl.max !
             if len(goal.args) > 1:
                 args = [self.trans.to_z3(arg) for arg in goal.args]
                 self.goal = max_of_values(args)
@@ -211,7 +249,7 @@ class Z3Solver():
                 self.goal = self.trans.to_z3(goal.args[0])
             self.sol = Optimize()
             self.objective = self.sol.maximize(self.goal)
-        elif isinstance(goal, dsl.min.func):
+        elif isinstance(goal, dsl._minfuncs):
             if len(goal.args) > 1:
                 args = [self.trans.to_z3(arg) for arg in goal.args]
                 self.goal = min_of_values(args)
@@ -250,8 +288,8 @@ class Z3Solver():
         if result == unsat:
             return unsat
         if result == unknown:
-            print("unknown_reason =", self.sol.unknown_reason())
             return unknown
+
         m = self.sol.model()
         print("z3 model() =", m)
         soln = m.eval(self.goal, model_completion = True)
@@ -260,8 +298,6 @@ class Z3Solver():
         soln = num_to_py(soln)
         assert soln not in self.solutions
         self.solutions.append(soln)
-        if self.objective is not None:
-            print("solve(): objective range is ", self.objective.lower(), "to", self.objective.upper())
         return sat
 
     def find_next_solution(self):
@@ -271,31 +307,80 @@ class Z3Solver():
         self.sol.add(self.goal != m.eval(self.goal, model_completion = True))
         return self.find_one_solution()
 
+    def find_objective(self):
+        "solve() for min/max."
+
+        print("z3 solver =", self.sol)
+        #print("z3 solver.smt2 =", self.sol.to_smt2())
+        result = self.solve_strategies()
+        if result == unsat:
+            return unsat
+        if result == unknown:
+            return unknown
+        assert result == sat
+
+        # Optimisation problems are a little different. It actually computes the infimum/supremum,
+        # and if those values can't be reached, eg the min/max value is +/-∞ then
+        # .check() returns sat but the model is not the inf/sup.
+        # (Also, things go wrong with multiple objectives: e.g minimising both x and x+1 with x>0 is broken,
+        # returning a range of values and missing the epsilon for x+1 objective.
+        # I think the range returned is between the .model() value and the actual sup/inf.
+        print("solve(): objective range is ", self.objective.lower(), "to", self.objective.upper())
+
+        # Don't know how to manipulate the object returned by value()
+        #value = self.objective.value()
+        # .upper/lower_values() returns [a,b,c]. value a*inf + b + eps*c
+        if self.objective._is_max:
+            a,b,c = map(num_to_py, self.objective.upper_values())
+        else:
+            a,b,c = map(num_to_py, self.objective.lower_values())
+
+        if a < 0:
+            soln = -oo
+        elif a > 0:
+            soln = oo
+        else:
+            if c == 0:
+                self.solution_attained = True
+            else:
+                print("ζ3.solve() Warning: can't reach the inf/sup value")
+            soln = b
+        if self.objective.lower_values() != self.objective.upper_values():
+            print("ζ3.solve() Warning: found range for objective")
+            #return unknown
+
+        # m = self.sol.model()
+        # print("z3 model() =", m)
+        print(self.goal, " evaluated to ", soln)
+        self.solutions.append(soln)
+        return solved
+
     def solve(self):#, spexp: sympy.Expr):
-        """Returns a value:
-        -True if solved, and self.solutions is list of one int or float
-        -'unsat' if unsat, and self.solutions = []
-        -'multiple' if not unique, and self.solutions a list of two or more solutions
-        -None if unsolved
+        """Returns one of
+        -solved:    self.solutions is list of one int or float
+        -unsat:     self.solutions = []
+        -notunique: self.solutions a list of two or more solutions
+        -unknown:   if unsolved
         """
         #print("z3 solver =", self.sol)
         self.solutions = []
+        if self.objective is not None:
+            return clean_sat(self.find_objective())
+
         ret = self.find_one_solution()
-        if ret == unsat:
-            return 'unsat'
+        if ret in (unsat, unknown):
+            return clean_sat(ret)
+
+        # goal isn't min/max, so check for unique solution
+        ret = self.find_next_solution()
+        if ret == sat:
+            return notunique
         if ret == unknown:
-            return None
+            # It's probably fine. TODO: should ideally warn the caller about it.
+            print("Warning: found one solution but couldn't prove it unique")
 
-        if self.objective is None:
-            # goal isn't min/max, so check for unique solution
-            ret = self.find_next_solution()
-            if ret == sat:
-                return 'multiple'  # Not unique
-            if ret == unknown:
-                # It's probably fine. TODO: should ideally warn the caller about it.
-                print("Warning: found one solution but couldn't prove it unique")
-
-        return True
+        self.solution_attained = True
+        return solved
 
     def have_quants(self) -> bool:
         "Returns true if any constraints or the goal contain quantifiers"
@@ -319,7 +404,7 @@ class Z3Solver():
         ctime = time.time() - ctime
         print(f"{tag} check() = {self._result} in {1e3 * ctime :.1f}ms")
         if self._result == unknown:
-            print("unknown_reason =", solver.unknown_reason())
+            print("reason_unknown =", solver.reason_unknown())
             return False
         if tag != 'nextsol':
             self.solved_by = tag
@@ -373,7 +458,7 @@ class Z3Solver():
 
 
         # Disable MBQI and use just E-matching
-        self.sol.set('smt.autoconf', False)  # ???
+        self.sol.set('smt.auto_config', False)  # ???
         self.sol.set('smt.mbqi', False)
         self.sol.set('smt.ematching', True)
         if self.try_sat(self.sol, 'ematching'): return self._result

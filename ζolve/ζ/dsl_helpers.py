@@ -1,5 +1,8 @@
 import sympy
 import ζ.dsl
+from sympy.core import BooleanKind, NumberKind
+from sympy.sets.sets import SetKind
+
 
 """
 Helper functions used in dsl.py but which don't want to live in that pollution.
@@ -9,7 +12,7 @@ Helper functions used in dsl.py but which don't want to live in that pollution.
 class DSLError(Exception):
     def __init__(self, msg, lineno = None):
         self.lineno = lineno
-        super(DSLError, self).__init__(msg)
+        super().__init__(msg)
 
 
 ################################################################################
@@ -56,27 +59,90 @@ SeqSymbol = sympy.IndexedBase
 
 class ζSymbol(sympy.Symbol):
     "Allow adding custom attributes, since Symbol has __slots__."
-
     var_type = None  # A Type tag
+    kind = NumberKind  # By default, overridden
+
+# NOT USED
+class ζBoolSymbol(sympy.Symbol):
+    """Special case for bools. Although sympy.Symbol does inherit from Boolean, so sympy allows using them
+    in place of bools anyway"""
+    kind = BooleanKind  # Overrides the kind property
+
+
+def to_NumberKind(expr):
+    expr.kind = NumberKind
+    return expr
 
 ################################################################################
 
+def args_or_iterable(args):
+    #if len(args) == 1 and isinstance(args[0], (list, tuple, set)):  # TODO: iterables
+    if len(args) == 1 and not isinstance(args[0], dict):
+        try:
+            return list(args[0])
+        except:
+            pass
+    return args
 
-class VarargsFunction:
-    "Wrap sympy.Function(name) to allow lists and sets as args."
-    def __init__(self, name, minargs = 1):
-        self.func = sympy.Function(name)
-        self.minargs = minargs
 
-    def __call__(self, *args):
-        # We override 'set' (real clever)
-        if len(args) == 1 and isinstance(args[0], (list, tuple, set)):
-            # Python sets can be unpacked with * too
-            args = args[0]
-        if len(args) < self.minargs:
-            raise TypeError(f"{name} expects at least {self.minargs} arg(s), was passed {len(args)}")
-        return self.func(*args)
+def assert_boolean_kind(expr, what):
+    if expr.kind != BooleanKind:
+        kind_name = str(expr.kind).replace('Kind', '').lower()
+        raise DSLError(what + " should be a boolean expression (e.g. <=), not a " + kind_name)
 
+def assert_number_kind(expr, what):
+    if expr.kind != NumberKind:
+        kind_name = str(expr.kind).replace('Kind', '').lower()
+        raise DSLError(what + " should be a number-valued expression, not a " + kind_name)
+
+
+
+# class VarargsFunction:
+#     "Wrap sympy.Function(name) to allow lists and sets as args."
+#     def __init__(self, name, minargs = 1):
+#         self.func = sympy.Function(name)
+#         self.minargs = minargs
+
+#     def __call__(self, *args):
+#         args = args_or_iterable(args)
+#         if len(args) < self.minargs:
+#             raise TypeError(f"{name} expects at least {self.minargs} arg(s), was passed {len(args)}")
+#         return self.func(*args)
+
+# class VarargsFunction(sympy.Function):
+#     # Note: name must not match any existing sympy function, such as 'gcd', because there's a cache
+#     def __new__(cls, name, minargs = 1):
+#         print("!!!init ", cls, name, minargs)
+#         ret = super().__new__(cls, name)
+#         print("  super done")
+#         return ret
+
+#     @classmethod
+#     def _valid_nargs(cls, nargs):
+#         # Used by Function.__init__
+#         print("!!!!! _valid_nargs")
+#         return True
+
+class VarargsFunction(sympy.Function):
+    def __new__(cls, name, **options):# kind = NumberKind):  #minargs = 1):
+        ret = super().__new__(cls, name, evaluate = False)# **options)
+        for opt,val in options.items():
+            ret.__dict__[opt] = val
+        return ret
+    def __call__(self, *args):# kind = NumberKind):  #minargs = 1):
+        print("__call__")
+        super().__call__(self, *args)
+        
+    # @classmethod
+    # def eval(cls, *args):
+    #     print("max eval")
+    @classmethod
+    def _should_evalf(cls, arg):
+        # Allow the arg to be a non-sympy expression, such as a list of args
+        return False
+
+
+# VarargsFunction = sympy.Function
 
 def ast_to_sympy(astnode):
     "Replace our sympy overrides with the sympy versions"
