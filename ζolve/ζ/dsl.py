@@ -134,8 +134,10 @@ count = VarargsFunction('ζcount')
 set = sympy.Function('ζset')
 
 def ForAll(*args):
-    # TODO
-    return True
+    raise NotImplementedError("ForAll")
+
+def Exists(*args):
+    raise NotImplementedError("Exists")
 
 # sympy.minimum/maximum(f, symbol, domain=Reals) returns the min/max of a function or expression,
 # if the expression doesn't contain the symbol it's returned.
@@ -186,6 +188,8 @@ def max(*args):
 
 _maxfuncs = (ζmax, sympy.Max)
 
+# TODO: sympy.Abs returns a UndefinedKind, they prehaps forgot to implement it
+
 class divides(Function): #VarargsFunction):
     kind = BooleanKind
     #is_integer = True
@@ -229,10 +233,10 @@ class If(Function): #VarargsFunction):
     @classmethod
     def eval(cls, C, T, E):
         assert_boolean_kind(C, "If's condition")
-        assert T.kind == E.kind, "If 'then' and 'else' expressions have different types"
+        assert getkind(T) == getkind(E), "If 'then' and 'else' expressions have different types"
     @property
     def kind(self):
-        return self.args[1].kind
+        return getkind(self.args[1])
 
 def Iff(a, b):
     assert_boolean_kind(a, '1st arg to Iff')

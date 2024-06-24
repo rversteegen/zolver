@@ -1,12 +1,14 @@
-import sympy
-import ζ.dsl
-from sympy.core import BooleanKind, NumberKind
-from sympy.sets.sets import SetKind
-
-
 """
 Helper functions used in dsl.py but which don't want to live in that pollution.
 """
+
+import sympy
+import ζ.dsl
+from sympy.core import BooleanKind, NumberKind, UndefinedKind
+from sympy.sets.sets import SetKind
+
+NotSymbolicKind = "NotSymbolicKind"
+
 
 
 class DSLError(Exception):
@@ -68,6 +70,14 @@ class ζBoolSymbol(sympy.Symbol):
     in place of bools anyway"""
     kind = BooleanKind  # Overrides the kind property
 
+def getkind(expr):
+    if not hasattr(expr, 'kind'):
+        return NotSymbolicKind
+    if expr.kind == UndefinedKind:
+        if isinstance(expr, sympy.Expr):
+            # Well it has to be a number, right (Set is not a Expr)
+            return NumberKind
+    return expr.kind
 
 def to_NumberKind(expr):
     if expr.kind != NumberKind:
@@ -88,12 +98,12 @@ def args_or_iterable(args):
 
 
 def assert_boolean_kind(expr, what):
-    if expr.kind != BooleanKind:
+    if getkind(expr) != BooleanKind:
         kind_name = str(expr.kind).replace('Kind', '').lower()
         raise DSLError(what + " should be a boolean expression (e.g. <=), not a " + kind_name)
 
 def assert_number_kind(expr, what):
-    if expr.kind != NumberKind:
+    if getkind(expr) != NumberKind:
         kind_name = str(expr.kind).replace('Kind', '').lower()
         raise DSLError(what + " should be a number-valued expression, not a " + kind_name)
 

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 
+import sys
+if '/home/ralph/.local/lib/python3.9/site-packages' in sys.path:
+    sys.path = ["/mnt/common/src/sympy"] + sys.path
+
 import re
 import ast
 from tokenize import NAME, OP
 from typing import List
-
-#import sys
-#sys.path = ["/mnt/common/src/sympy"] + sys.path
 
 import sympy
 import sympy.parsing.ast_parser
@@ -174,6 +175,8 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
                 ret = eval(e, global_dict, local_dict)
                 #print("GOT", ret)
                 return ret
+    except NotImplementedError:
+        raise
     except Exception as e:
         raise DSLError(f"DSL script threw {type(e).__name__} '{str(e).strip()}'  on line  '{string}'", lineno)
 
@@ -399,12 +402,11 @@ goal = count(S)
 """
 
     intext = """
-    c: bool
-    #b = max(c, 2, 3)
-    b = divides(4, 16)
-    Iff(c, b)
-    print("KIND", b, type(b), repr(b), b.kind)
-    goal = If(If(c, False, 5 > 1), 4, 5)
+x1 : Int
+y1 : Int
+x2 : Int
+y2 : Int
+goal = abs(x2 - x1) + abs(y2 - y1)
     """
 
     workspace = load_dsl(intext)
