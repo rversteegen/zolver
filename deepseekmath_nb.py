@@ -28,6 +28,8 @@
 
 
 # %%
+
+# %%
 ### %%time
 import os
 # Try reduce wasted memory due to small 11MB allocations consuming 20MB blocks
@@ -70,7 +72,7 @@ RELOAD_MODEL = False   # For interactive run-all
 DEVICE = 'cuda' #if torch.cuda.is_available() else 'cpu'
 N_REPETITIONS = 10 if VALIDATE else (20 if SLOW else 1)   # 6
 MAX_SINGLE_GEN_TOKENS = 1800 if VLLM else 2048
-MAX_GEN_TOKENS = 2048 if SLOW else 500  #CHANGE
+MAX_GEN_TOKENS = 1400 if SLOW else 500  #CHANGE
 #MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
 MAX_TOKENS = 2048
 
@@ -672,9 +674,10 @@ error_stopping_criteria = transformers.StoppingCriteriaList([main_stoplist, erro
 #gc.collect()
 
 class GenStreamWatcher(transformers.generation.streamers.BaseStreamer):
-    def __init__(self):
+    def __init__(self, tokenizer):
         self.start_time = None
         self.tokens = []
+        self.tokenizer = tokenizer
         
     def put(self, token_ids):
         # First the prompt is fed in, before KVs are built for it.
@@ -683,7 +686,7 @@ class GenStreamWatcher(transformers.generation.streamers.BaseStreamer):
             if self.start_time is None:
                 #print("stream start")
                 self.start_time = time.time()
-            #print(tokenizer.decode(token_ids), end='')
+            #print(self.tokenizer.decode(token_ids), end='')
         
     def end(self):
         pass
@@ -876,7 +879,7 @@ prompt_options = [compute0, elab0tool]
 prompt_options = [compute0, tool0, analy2] # 16
 prompt_options = [compute0, tool0, tool1, steps1, analy2]  #, elab0tool, ]
 prompt_options = [tool1, analy2] # 21, 17, X16
-prompt_options = [tool1,elab0tool]
+prompt_options = [elab0tool]
 #prompt_options = [tool1, analy2, compute0]
 
 # %% [markdown]
@@ -884,30 +887,38 @@ prompt_options = [tool1,elab0tool]
 
 # %%
 
+
 # %%
+
 class LLMGenerator:
-    def __init__(self):
-        self.tokens = tokenizer("")['input_ids']
-        self.prompt = tokenizer.decode(self.tokens)  # Will be equal to tokenizer.bos_token
+    def __init__(self, model, tokenizer, first_model = True):
+        self.model = model
+        self.tokenizer = tokenizer
+        self.tokens = self.tokenizer("")['input_ids']
+        self.prompt = self.tokenizer.decode(self.tokens)  # Will be equal to tokenizer.bos_token
         self.num_gen_tokens = 0  # Total, not including prompt and outputs
         self.past_key_values = None
         self.hit_limit = False
         self.need_update = True
         self.stop_on_error = True
         self.bad_words = None
-        ngram_stopper.reset()
+        self.first_model = first_model
+        deepseek = first_model
+        self.deepseek = deepseek
+        if deepseek:
+            ngram_stopper.reset()
 
     def update_inputs(self):
         if True:
             # split_special_tokens = False is the default, so <｜end▁of▁sentence｜> will convert
-            self.model_inputs = tokenizer(self.prompt, add_special_tokens = False, return_tensors='pt').to(model.device)
+            self.model_inputs = self.tokenizer(self.prompt, add_special_tokens = False, return_tensors='pt').to(self.model.device)
         else:
-            self.model_inputs = tokenizer.apply_chat_template(self.messages, add_generation_prompt=True, return_tensors="pt").to(model.device)
+            self.model_inputs = self.tokenizer.apply_chat_template(self.messages, add_generation_prompt=True, return_tensors="pt").to(self.model.device)
         self.tokens = self.model_inputs['input_ids'][0]
         #self.decode_tokens()
         
     def decode_tokens(self):
-        self.prompt = tokenizer.decode(self.tokens, skip_special_tokens = False)
+        self.prompt = self.tokenizer.decode(self.tokens, skip_special_tokens = False)
         self.need_update = False
         
     def user_prompt(self, text, assist_prefix = ""):
@@ -915,18 +926,23 @@ class LLMGenerator:
         Call this before the first .generate() or at any time to add a User direction."""
         old_input = len(self.tokens)
         ol = len(self.prompt)
-        if True:
+        if self.deepseek:
             # DeepSeek specific template
-            if old_input > 1 and not self.prompt.endswith(tokenizer.eos_token):
-                self.prompt += tokenizer.eos_token
+            if old_input > 1 and not self.prompt.endswith(self.tokenizer.eos_token):
+                self.prompt += self.tokenizer.eos_token
             if True:
                 self.prompt += ("User: " + text.strip() + "\n\nAssistant: " + assist_prefix.strip(' ')).strip(' ')
             else:
                 self.prompt += ("User: " + text.strip() + "\n\n" + assist_prefix.strip(' ')).strip(' ')
+        elif True:
+            # Not implemented
+            self.prompt += ("### Instruction:\n" + text.strip() + "\n\n### Response:\n" + assist_prefix.strip(' ')).strip(' ')
         else:
-            self.messages += [{"role": "user", "content": text}]
+            self.messages = [{"role": "user", "content": text}]
             if assist_prefix:
                 self.messages.append({"role": "assistant", "content": assist_prefix})
+            self.model_inputs = self.tokenizer.apply_chat_template(self.messages, add_generation_prompt=True, return_tensors="pt").to(self.model.device)
+
         self.update_inputs()
         print(f"<<<<<PROMPT {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + self.prompt[ol:] + ">>>>>")
 
@@ -959,20 +975,23 @@ class LLMGenerator:
             print("SKIP GENERATE DUE TO LIMIT")
             return
 
-        #if self.need_update:
-        #    self.update_inputs()  # Regenerate model_input
-        if self.stop_on_error:
-            stopper = error_stopping_criteria
+        if self.first_model:
+            #if self.need_update:
+            #    self.update_inputs()  # Regenerate model_input
+            if self.stop_on_error:
+                stopper = error_stopping_criteria
+            else:
+                stopper = stopping_criteria
         else:
-            stopper = stopping_criteria
-            
+            stopper = None
+
         streamer = GenStreamWatcher()
         
             
         input_len = len(self.tokens)
         #print("ngram stop inactive=", ngram_stopper.inside_code)
         try:
-            generation_output = model.generate(**self.model_inputs, 
+            generation_output = self.model.generate(**self.model_inputs, 
                                                max_new_tokens = min(limit, max_toks),
                                                return_dict_in_generate = USE_PAST_KEY,
                                                past_key_values = self.past_key_values,
@@ -981,7 +1000,7 @@ class LLMGenerator:
                                                top_p = top_p,
                                                bad_words_ids = self.bad_words,
                                                #no_repeat_ngram_size = 50,
-                                               pad_token_id = tokenizer.eos_token_id,
+                                               pad_token_id = self.tokenizer.eos_token_id,
                                                num_return_sequences = 1,
                                                streamer = streamer,
                                                stopping_criteria = stopper)
@@ -991,7 +1010,7 @@ class LLMGenerator:
             self.past_key_values = None
             self.tokens += streamer.tokens
             print("OOM recovered")
-            self.model_inputs = {'input_ids': self.tokens}  # torch.tensor([self.tokens]).to(model.device)
+            self.model_inputs = {'input_ids': self.tokens}  # torch.tensor([self.tokens]).to(self.model.device)
         else:
             if USE_PAST_KEY:
                 sequences = generation_output.sequences
@@ -1004,12 +1023,12 @@ class LLMGenerator:
             self.model_inputs = {'input_ids': sequences}
         gentime = time.time() - streamer.start_time
 
-        decoded_output = tokenizer.decode(self.tokens, skip_special_tokens = False)
+        decoded_output = self.tokenizer.decode(self.tokens, skip_special_tokens = False)
         self.new_output = decoded_output[len(self.prompt):]
         self.prompt = decoded_output
         self.need_update = True
 
-        #self.new_output = tokenizer.decode(gen.tokens[input_len:], skip_special_tokens=True)
+        #self.new_output = self.tokenizer.decode(gen.tokens[input_len:], skip_special_tokens=True)
 
         runt = time.time() - startt
 
@@ -1033,122 +1052,7 @@ class LLMGenerator:
         return self.prompt.endswith(text)
     
     def set_bad_words(self, words: list):
-        self.bad_words = tokenizer(words, add_special_tokens = False)['input_ids']
-
-# %%
-if VLLM:
-    
-    class LLMGenerator:
-        def __init__(self):
-            self.tokens = [] #tokenizer("")['input_ids']
-            self.prompt = "" #tokenizer.decode(self.tokens)  # Will be equal to tokenizer.bos_token
-            self.num_gen_tokens = 0  # Total, not including prompt and outputs
-            self.past_key_values = None
-            self.hit_limit = False
-            self.need_update = True
-            self.stop_on_error = True
-            self.bad_words = None
-    
-        def user_prompt(self, text, assist_prefix = ""):
-            """Add `text` to the prompt as a User message, followed by Assistant:, and optionally start of assistant response.
-            Call this before the first .generate() or at any time to add a User direction."""
-            old_input = len(self.tokens)
-            ol = len(self.prompt)
-            if True:
-                # DeepSeek specific template
-                if old_input > 1 and not self.prompt.endswith(tokenizer.eos_token):
-                    self.prompt += tokenizer.eos_token
-                if True:
-                    self.prompt += ("User: " + text.strip() + "\n\nAssistant: " + assist_prefix.strip(' ')).strip(' ')
-                else:
-                    self.prompt += ("User: " + text.strip() + "\n\n" + assist_prefix.strip(' ')).strip(' ')
-            else:
-                self.messages += [{"role": "user", "content": text}]
-                if assist_prefix:
-                    self.messages.append({"role": "assistant", "content": assist_prefix})
-            self.update_inputs()
-            print(f"<<<<<PROMPT {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + self.prompt[ol:] + ">>>>>")
-
-        def append_prompt(self, text):
-            "Append to prompt, without changing the role."
-            text = text.rstrip(' ')
-            self.prompt += text
-            old_input = len(self.tokens)
-            self.update_inputs()
-            print(f"<<<<<APPEND {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + text + ">>>>>")
-
-        def replace_tokens(self, new_tokens):
-            self.tokens = new_tokens
-            self.past_key_values = None
-            self.decode_tokens()
-
-        def replace_prompt(self, new_prompt):
-            self.prompt = new_prompt
-            self.past_key_values = None
-            self.update_inputs()
-
-        def check_limit(self):
-            max_toks = min(MAX_SINGLE_GEN_TOKENS, MAX_TOKENS - len(self.tokens), MAX_GEN_TOKENS - self.num_gen_tokens)
-            return max_toks
-
-
-
-        def generate(self, temperature = 0.8, top_p = 0.95):
-
-            sampling_params = SamplingParams(temperature=temperature,
-                                             top_p=top_p,
-                                             max_tokens=MAX_SINGLE_GEN_TOKENS,
-                                             include_stop_str_in_output = True,
-                                             stop = [tokenizer.eos_token] + stop_words,
-                                            )
-            startt = time.time()
-            generation_output = llm.generate(prompt, sampling_params=sampling_params)
-
-            # Adjust this line based on the actual return type
-            if isinstance(generation_output, list) and len(generation_output) > 0:
-                if hasattr(generation_output[0], 'outputs') and len(generation_output[0].outputs) > 0:
-                    decoded_output = generation_output[0].outputs[0].text
-                else:
-                    raise ValueError("Expected 'outputs' attribute with a nested 'text' attribute in the first element of the list")
-            #elif isinstance(generation_output, dict) and 'text' in generation_output:
-            #    decoded_output = generation_output['text']
-            else:
-                raise ValueError("Unexpected generation output format")
-
-            #print(f"{decoded_output[current_printed:]}\n")
-
-            output = generation_output[0].outputs[0]
-            new_toks = len(output.token_ids)
-            self.new_output = output.text
-            self.tokens = generation_output[0].prompt_token_ids + output.token_ids
-            self.num_gen_tokens += len(output.token_ids)
-
-            endt = time.time()
-            runt = endt - startt
-
-            metrics = generation_output[0].metrics            
-            gentime = endt - metrics.first_token_time
-            #print(metrics)
-            #print("strt time=", startt)
-            #print("last time=", metrics.last_token_time)
-            #print("1stt time=", metrics.first_token_time)
-            #print("fin time =", metrics.finished_time)
-            #print("real time=", endt)
-
-            print("stopreason=", output.stop_reason)
-
-            print(f"<<<<<GEN {new_toks} tokens ({len(self.tokens)} total) in {gentime :.2f}+{runt - gentime :.2f}s ({(new_toks-0)/gentime :.2f} tok/s) ({cpu_time()}) {gpu_mem()} {nvidia_pstate()}\n"
-                  + self.new_output
-                  + ">>>>>")
-
-            self.prompt = decoded_output
-            self.stop_reason = output.stop_reason
-
-    def endswith(self, text):
-        return self.prompt.endswith(text)
-    
-    def set_bad_words(self, words: list):
-        pass#self.bad_words = tokenizer(words, add_special_tokens = False)['input_ids']
+        self.bad_words = self.tokenizer(words, add_special_tokens = False)['input_ids']
 
 # %%
 if LOGGING:
@@ -1174,7 +1078,8 @@ def predict(probi, problem):
     for jj in range(N_REPETITIONS): # tqdm(range(N_REPETITIONS)):
         
         
-        temperature = 0.9 * (0.3+0.25*jj) / (0.25*jj + 1)  # 0.27 0.40 0.48 0.54 0.59 0.62 0.65...
+        #temperature = 0.9 * (0.3+0.25*jj) / (0.25*jj + 1)  # 0.27 0.40 0.48 0.54 0.59 0.62 0.65 ... 0.71
+        temperature = (0.35+0.25*jj) / (0.25*jj + 1)   # 0.35 0.48 0.57 .... 0.8
         temperature_coding = temperature
         
         it_start_time = time.time()
@@ -1283,6 +1188,10 @@ def predict(probi, problem):
                 # Model sometimes outputs a line of ```` often not ending in 'python'
                 elif gen.endswith("```python") or (currently_text and gen.endswith("````") ):
                     # Starting code
+                    print("CONSIDER IT")
+                    if code_blocks == 3:
+                        result_info = "toomuchcode"
+                        break
                     temperature_inner = temperature_coding
                     top_p_inner = top_p_coding
                     code_status = True
@@ -1423,7 +1332,7 @@ def predict(probi, problem):
                 result_output, boxed = process_text_output(gen.new_output)
                 if result_output != -1 and last_code_result != -1 and result_output != last_code_result:
                     print("HMM... TEXT/CODE MISMATCH")
-                    penalty = 0.1
+                    penalty = 0.05
                     # BAd idea since the agent will almost certainly agree
                     #if gen.check_limit() > 45:
                     #    gen.user_prompt(f"Is the answer actually {last_code_result}? If you know it put it in \\boxed{{}}")
@@ -1473,8 +1382,8 @@ def predict(probi, problem):
             #    score -= 0.2
             #elif gen.num_gen_tokens > 950:
             #    score -= 0.1
-            if 1 <= code_blocks <= 3:
-                score += 0.15
+            if 1 <= code_blocks: # <= 3:
+                score += 0.2
             score -= penalty
                     
         #except torch.cuda.OutOfMemoryError as e:  # or RuntimeError if pytorch caching allocator disabled
