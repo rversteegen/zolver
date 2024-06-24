@@ -170,9 +170,9 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
         e = compile(a, "<string>", mode)
         with ζ.util.time_limit(SECONDS_LIMIT):
             with ζ.util.memory_limit(MB_LIMIT * 2**20):
-                print(mode.upper(),  ast.dump(a))
-                ret =  eval(e, global_dict, local_dict)
-                print("GOT", ret)
+                #print(mode.upper(),  ast.dump(a))
+                ret = eval(e, global_dict, local_dict)
+                #print("GOT", ret)
                 return ret
     except Exception as e:
         raise DSLError(f"DSL script threw {type(e).__name__} '{str(e).strip()}'  on line  '{string}'", lineno)
@@ -326,7 +326,8 @@ def load_dsl(script, verbose = True):
 
         res = parse_and_eval_dsl(line, namespace, global_namespace, "exec", lineno)
 
-        if verbose: print(" eval->", res)
+        if verbose and res is not None:
+            print(" eval->", res)
 
         # If it's a boolean, make it a constraint
 

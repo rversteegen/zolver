@@ -95,6 +95,7 @@ class SympyToZ3:
             sympy.Abs:         lambda node, arg:  If(arg < 0, -arg, arg),
 
             dsl.If:            lambda node, C, T, E:  If(C, T, E),
+            sympy.Not:         lambda node, arg:  Not(arg),
 
 
             sympy.Integer:     lambda node:  IntVal(node.p),

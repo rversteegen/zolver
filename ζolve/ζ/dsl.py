@@ -139,22 +139,35 @@ def ForAll(*args):
 
 # sympy.minimum/maximum(f, symbol, domain=Reals) returns the min/max of a function or expression,
 # if the expression doesn't contain the symbol it's returned.
-# sympy.Min/Max the min/max expressions. Interestingly if given an unevaluated constant expression
-# The min/max values of 
+# sympy.Min/Max are symbolic min/max expressions.
+# They (MinMaxBase) are a good example, below, of cleaning up/processing args in __new__,
+# but can't be used because their __new__ converts Min(x) -> x even if evaluate=False
+
+# class ζmin(sympy.Min):
+#     kind = NumberKind
+#     @classmethod
+#     def _new_args_filter(cls, arg_sequence):
+#         return super()._new_args_filter(args_or_iterable(arg_sequence))
+
+# def min(*args):
+#     if all(isinstance(arg, Expr) for arg in args):
+#         return to_NumberKind(sympy.Min(*args))
+#     return ζmin(*args)
+
+
 # min = VarargsFunction('ζMinimum', kind=NumberKind)
 # max = VarargsFunction('ζMaximum')
 
-# class ζmin(Function):
-#     kind = NumberKind
-
-
-class ζmin(sympy.Min):
+class ζmin(Function):
     kind = NumberKind
-
+    @classmethod
+    def _should_evalf(cls, arg):
+        return False
 
 def min(*args):
-    # if all(isinstance(arg, Expr) for arg in args):
-    #     return to_NumberKind(sympy.Min(*args))
+    args = args_or_iterable(args)
+    if len(args) > 1 and all(isinstance(arg, Expr) for arg in args):
+        return to_NumberKind(sympy.Min(*args))
     return ζmin(*args)
 
 _minfuncs = (ζmin, sympy.Min)
@@ -166,7 +179,8 @@ class ζmax(Function):
         return False
 
 def max(*args):
-    if all(isinstance(arg, Expr) for arg in args):
+    args = args_or_iterable(args)
+    if len(args) > 1 and all(isinstance(arg, Expr) for arg in args):
         return to_NumberKind(sympy.Max(*args))
     return ζmax(*args_or_iterable(args))
 

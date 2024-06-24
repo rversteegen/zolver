@@ -70,13 +70,15 @@ class ζBoolSymbol(sympy.Symbol):
 
 
 def to_NumberKind(expr):
-    expr.kind = NumberKind
+    if expr.kind != NumberKind:
+        expr.kind = NumberKind
     return expr
 
 ################################################################################
 
 def args_or_iterable(args):
     #if len(args) == 1 and isinstance(args[0], (list, tuple, set)):  # TODO: iterables
+    args = list(args)
     if len(args) == 1 and not isinstance(args[0], dict):
         try:
             return list(args[0])
