@@ -16,17 +16,11 @@ INPUTDIR = "translations/"
 
 extracts = ""
 
-fails = []
+selections = []
 
-def process_file(fname):
-    global extracts
-    global fails
-
-    df = pd.read_csv(INPUTDIR + fname)
-
-    stats = pd.DataFrame(
-        {
-            'total': len(df),
+stats_template = {
+            'prob_name' : '',
+            'total': 1,  #len(df),
             'parsed': 0,
             'parsefailed': 0,
             'solvefailed': 0,
@@ -40,11 +34,24 @@ def process_file(fname):
             'unsat': 0,
             'unknown': 0,
             'excepts': 0,
-        }, index = [fname])
+        }
+by_prob = pd.DataFrame(stats_template, index = [])
+
+def process_file(fname):
+    global extracts
+    global selections
+    global by_prob
+
+    df = pd.read_csv(INPUTDIR + fname)
+
+    allstats = pd.DataFrame(stats_template, index = [fname])
 
     for idx in df.index:
         correct = False
         row = df.loc[idx]
+        stats = pd.DataFrame(stats_template, index = [fname])
+        stats.prob_name = row.prob_name
+
         print("********************************************************************************")
         print(f"\n\n\n###### Problem {row.prob_name}:\n{row.problem}\n\n###### Translation:\n{row.translation}\n")
         try:
@@ -80,12 +87,18 @@ def process_file(fname):
             except NotImplementedError as e:
                 print("---------------SOLVE FAILED: NotImplementedError")
                 stats.unimp += 1
-                stats.solvefailed += 1
-                res_note = str(e)
+                #stats.solvefailed += 1
+                res_note = repr(e)
             except (SyntaxError, dsl.DSLError, ζ3.MalformedError) as e:
                 print("---------------SOLVE FAILED")
                 stats.solvefailed += 1
+                res_note = repr(e)
 
+        except NotImplementedError as e:
+            print("---------------PARSE FAILED: NotImplementedError")
+            stats.unimp += 1
+            #stats.solvefailed += 1
+            res_note = repr(e)
         except (SyntaxError, dsl.DSLError, ζ3.MalformedError) as e:
             print("---------------PARSE FAILED")
             print(e)
@@ -99,11 +112,14 @@ def process_file(fname):
         #     print("uncaught except", e)
         #     stats.excepts += 1
 
-        if not correct:
-            fails += [(row.problem, row.translation, res_note)]
+        if stats.parsefailed[0]:
+            selections += [(row.problem, row.translation, res_note)]
+
+        allstats = pd.concat([allstats,stats])
+        by_prob = pd.concat([by_prob,stats])
 
 
-    return stats
+    return allstats
 
 
 if False:
@@ -119,19 +135,30 @@ if False:
 else:
     stats = pd.DataFrame()
     for fname in os.listdir(INPUTDIR):
-        if fname.endswith('.csv'):
+        if fname.endswith('.csv'): # and 'InternLM2Math7b_v4' in fname:
             stats = pd.concat([stats, process_file(fname)])
+            # if len(stats)> 100:
+            #     break
     print(stats)
 
-    random.shuffle(fails)
-    with open("translation_failures.txt", "w") as ofile:
-        for prob, trans, note in fails:
-            ofile.write("## PROBLEM\n" + prob + "\n\n## TRANS\n" + trans + "\n\nRESULT: " + note + "\n\n\n")
+    if len(selections):
+        random.shuffle(selections)
+        with open("translation_selections.txt", "w") as ofile:
+            for prob, trans, note in selections:
+                ofile.write("## PROBLEM\n" + prob + "\n\n## TRANS\n" + trans + "\n\nRESULT: " + note + "\n\n\n")
+        print("Wrote translation_selections.txt")
 
 #print(f"{fname}:\t solved {stats.correct}, wrong {stats.wrong}, {stats.solve_ran} parsed+ran, {stats.parsed} parsed and {stats.parsefailed} failed to parse of {stats.total} total; {stats.excepts} unexpected exceptions\n")
 
-tally = stats.sum()
 
+
+
+probs = stats.groupby(['prob_name']).sum(numeric_only = True)
+print("PROB TALLYS")
+print(probs.to_string())
+
+
+tally = stats.sum(numeric_only = True)
 print(f"""
 
 
