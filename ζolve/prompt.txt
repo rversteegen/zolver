@@ -39,7 +39,8 @@ goal = f(pi)
 • the length of a sequence q → len(q)  %% If q is infinite, len(q) = oo
 • an element x_i of x → x[i]   %% Equal to 0 if i >= len(x)
 • x is an unbounded unknown sequence of integers → x : Seq(Int)
-• {x_i} is a sequence of integers for i ∈ 1, …, 32 → x : Seq(Int, start = 1, end = 32)
+• x is a length n unknown sequence of integers, x_0, x_1, …, x_{n-1}  → x : Seq(Int, length = n)
+• {x_i} is a sequence of integers for i ∈ 1, …, 32 → x : Seq(Real, start = 1, length = 32)
 • the sequence of integers 0, …, 9 → seq(0, 9)
 • the sequence of integers 4, …, 6 → range(4, 7)
 • list/sequence of two values x, y → [x, y]
@@ -65,7 +66,7 @@ The first argument is the list of index variables, each is a previously declared
 • both the above: "x in S and p(x)"
 The index variable MUST be declared first.
 
-Use ForAll and Exists to put constraints on sequences and functions, for example the Fibonacci sequence:
+Use ForAll and Exists to put constraints on sequences and unknown functions, for example the Fibonacci sequence:
 ```
 fib : Seq(Int)
 fib[1] == fib[2] == 1
@@ -74,6 +75,7 @@ ForAll([i >= 3], fib[i] == fib[i - 1] + fib[i - 2])
 ```
 
 • x ∈ S → x in S
+• for every i ∈ S, p holds → ForAll([i in S], p)
 • for every i ∈ S, p holds → ForAll([i in S], p)
 • for all i and j, e holds → ForAll([i, j], e)
 • sum of all elements of sequence/list L → sum(L)
@@ -94,6 +96,7 @@ ForAll([i >= 3], fib[i] == fib[i - 1] + fib[i - 2])
 
 ALL translations MUST include a line "goal = ..."!
 
+[BLOCK] ntheory or comb
 Syntax lookup table:
 • greatest common divisor of x and y → gcd(x, y)
 • least common multiple of x and y → lcm(x, y)
@@ -101,6 +104,7 @@ Syntax lookup table:
 • number of combinations x choose y → comb(x, y)
 • sum of numerator p and denominator q of a rational x written as p/q where gcd(p,q)=1 → sum(as_numer_denom(x))
 
+[BLOCK] geometry
 You can use standard sympy types and functions for geometry. The CAS extends these for solving for unknowns:
 • p is an unknown point on the plane → p : Point   %% p has components p.x, p.y
 • S is an unknown polygon on the plane → P : Polygon
@@ -125,16 +129,20 @@ A polygon P has components P.area, P.vertices, P.centroid, P.angles, P.sides, P.
 • area of polygon G → G.area
 • the set of interior angles of polygon G → G.angles
 
+[BLOCK] geometry linalg
 Point and Vector(2) are the same and interchangeable.
 
+[BLOCK] linalg
 Types and functions for linear algebra are the same as sympy. For example:
 • v is a vector of length n, optional type T (defaults to Real) → v : Vector(n, T)  %% E.g. Vector(2, Int), Vector(3)
 • M is an n*m matrix, optional type T (defaults to Real) → M : Matrix(n, m, T)  %% E.g. Matrix(2, 2)
 • the matrix with rows 0 3 and 1 7 → Matrix([[0, 3], [1, 7]])
 • determinant of M → det(M)
+[BLOCK] geometry linalg
 • the image of a Point v under a Matrix M → M @ v
 • the image of any shape (e.g. Line, Polygon) q under a 2x2 Matrix M → M @ q
 
+[BLOCK]
 Use comments starting with '#' to explain how your translated variables and constraints correspond to the problem statement BUT give a *direct* translation into the algebra system, don't try to solve the problem!
 Make the translation as close as possible to the original English while following the correct syntax!
 Put all the relevant information (needed to reach the answer) from the problem statement into your translation. So if a quantity or formula exists in the problem it should usually be in the translation!
@@ -145,33 +153,34 @@ Examples:
 "When the greatest common divisor and least common multiple of two integers are multiplied, the product is 180. How many different values could be the greatest common divisor of the two integers?"
 
 ### TRANSHEADER
-STARTBLOCK
+STARTCODE
 # Name the two integers a and b
 a : Int
 b : Int
 gcd(a, b) * lcm(a, b) == 180
 # The number of possible values of gcd(a, b):
 goal = count(gcd(a, b))
-ENDBLOCK
+ENDCODE
 
 ### Statement
 "What is the first natural number after 42 that has a remainder of $5$ when divided by $7$?"
 
 ### TRANSHEADER
-STARTBLOCK
+STARTCODE
 # Call this number 'a'
 a : Int
 a > 42
 a % 7 == 5
 # The first such number is the minimum of all possible assignments to 'a'
 goal = min(a)
-ENDBLOCK
+ENDCODE
 
+[BLOCK] seqs or relations
 ### Statement
 "A geometric sequence starts with $a_1 = 2$. If $a_4 = 6$ what is $a_9$?""
 
 ### TRANSHEADER
-STARTBLOCK
+STARTCODE
 # In general, 'a' may contain real numbers
 a : Seq(Real)
 # A geometric sequence is defined by a[i] = r * a[i - 1]
@@ -182,46 +191,49 @@ ForAll([i > 1], a[i] == r * a[i - 1])
 a[1] == 2
 a[4] == 6
 goal = a[9]
-ENDBLOCK
+ENDCODE
 
+[BLOCK] complex
 ### Statement
 "A complex number $x+yi$ has magnitude 2 when added to 3+4i. What's the minimum possible value of $x + y$?"
 
 ### TRANSHEADER
-STARTBLOCK
+STARTCODE
 # We can either use two Real variables x and y or a single Complex variable z = x+yi. A single variable is easier for arithmetic
 z : Complex
 abs(z + 3+4*I) == 2
 # We want to minimize x + y
 goal = min(Re(z) + Im(z))
-ENDBLOCK
+ENDCODE
 
 ### TRANSHEADER
-STARTBLOCK
+STARTCODE
 # Alternatively, we can use reals, and the magnitude of a complex number z is defined as sqrt(Re(z)^2 + Im(z)^2)
 x : Real
 y : Real
 sqrt((x+3)^2 + (y+4)^2) == 2
 goal = min(x + y)
-ENDBLOCK
+ENDCODE
 
+[BLOCK] graphs or complex
 ### Statement
-"What is the sum of all values of $y$ for which the expression $\frac{y+6}{y^2-5y+4}$ is undefined?"
+"What is the sum of all values of $y$ for which the complex function $\frac{y+6}{y^2-5y+4}$ is undefined?"
 
 ### TRANSHEADER
-STARTBLOCK
+STARTCODE
 # A fraction is undefined when the denominator is 0, so we need to solve y^2 - 5y + 4 = 0
-y : Real
+y : Complex
 y^2 - 5*y + 4 == 0
 # Sum all solutions
 goal = sum(y)
-ENDBLOCK
+ENDCODE
 
+[BLOCK] geometry
 ### Statement
 "Two adjacent vertices of a regular hexagon are (3, 4) and (5, 6) and it encloses the origin. What is the distance from its center to the origin?"
 
 ### TRANSHEADER
-STARTBLOCK
+STARTCODE
 # Declare the hexagon
 hexagon : RegularPolygon(n = 6)
 # Define the first and second vertices
@@ -231,13 +243,14 @@ origin : Point
 origin == Point(0, 0)
 hexagon.encloses(origin)
 goal = distance(hexagon.center, origin)
-ENDBLOCK
+ENDCODE
 
+[BLOCK] ntheory or seqs
 ### Statement
 "Find the smallest four-digit palindrome which is the square of another palindrome."
 
 ### TRANSHEADER
-STARTBLOCK
+STARTCODE
 # Define a function to check if the digits of a number are the same forwards and backwards
 is_palindrome : Function([Int], Bool)
 is_palindrome == Lambda([i], digits(i, 10) == reversed(digits(i, 10)))
@@ -250,11 +263,14 @@ m : Int
 n == m^2
 # Find the smallest n
 goal = min(n)
-ENDBLOCK
+ENDCODE
 
+[BLOCK] geometry
 ### Statement
-"The angles of quadrilateral $ABCD$ satisfy  $\angle A = 2\angle B = 3\angle C = 4\angle D$.  What is the degree measure of $\angle A$, rounded to the nearest whole number?"
+"The angles of quadrilateral $ABCD$ satisfy $\angle A = 2\angle B = 3\angle C = 4\angle D$. What is the degree measure of $\angle A$, rounded to the nearest whole number?"
+
 ### TRANSHEADER
+STARTCODE
 # Define the variables for the angles measured in degrees
 A, B, C, D : Real
 # The given relationship between the angles
@@ -263,3 +279,25 @@ A == 2 * B == 3 * C == 4 * D
 sum(A, B, C, D) == 360
 # Round A to an integer
 goal = round(A)
+ENDCODE
+
+[BLOCK] comb seqs or prob
+### Statement
+"The Smith family has 4 sons and 3 daughters. In how many ways can they be seated in a row of 7 chairs such that at least 2 boys are next to each other?"
+
+### TRANSHEADER
+STARTCODE
+# The order of the sons and daughters doesn't matter, only whether each seat has a son or a daughter. Represent the seats as a list of 7 numbers
+seats : Seq(Int, length = 7)
+# Define seat labels 'son', 'daughter'
+son = 0
+daughter = 1
+# Each seat has a son or daughter
+ForAll([s in seats], s == son or s == daughter)
+# There is an pair of adjacent seats i, i + 1 with sons
+i : Int
+seats[i] == son
+seats[i + 1] == son
+# The answer is the number of possible assignments to seats
+goal = count(seats)
+ENDCODE
