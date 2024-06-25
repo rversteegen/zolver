@@ -13,6 +13,9 @@ def build_prompt(filename = INDIR + "prompt.txt", sections = ['seqs', 'graphs', 
     for line in lines.split("\n"):
         if line.startswith('[NOTE]'):
             continue
+        if line.startswith('[ELSE]'):
+            including = not including
+            continue
         if line.startswith('[BLOCK]'):
             if len(selected) > maxlength:
                 print("build_prompt: Reached maxlength!!")

@@ -2,77 +2,94 @@
 
 Please directly translate the following maths problem statement into code for the CASconstraint constraint-solving computer algebra system (CAS). CASconstraint syntax is very similar to python, sympy and z3. Use the following rules and "math → code" syntax lookup tables to translate.
 
-An expression is any formula such as "x * y" or "count([x], min(x))". An expression can include unknowns. A proposition is any expression with a boolean value, such as "a > 2 and" or "is_prime(x)".
-
+[NOTE] An expression is any formula such as "x * y" or "count([x], min(x))". An expression can include unknowns. 
 Unknown variables must be declared with type annotations before they are used. Choose appropriate variable names, single letters aren't necessary.
 
-Known quantities can be named as variables using "=" without a type annoatation. For example to create an enumeration of 3 colors as constants 0, 1, 2:
+Known quantities can be named as variables using "=" without a type annotation.
+[BLOCK] comb or prob
+For example to create an enumeration of 3 colors as constants 0, 1, 2:
 ```
 red, green, blue = range(3)
 ```
+[ELSE]
+For example to store a constant:
+```
+cards = 29
+```
+[BLOCK]
 
 • comment → # comment
 • create a new temporary variable (not an unknown) expr from for → a == b
 • x is an integer unknown → x : Int
 • x is a real unknown → x : Real  %% Including rationals
-• x is a complex unknown → x : Complex
-• the imaginary unit i → I
-• complex number a + bi → a + b * I
 • proposition p is a constraint → p  %% On a line by itself
 • x is positive → x > 0
 • two expressions are equal, a = b → a == b
 • multiplication, e.g. 2s(t+1) → 2*s * (t+1)  %% * must be used
+[BLOCK] complex
+• x is a complex unknown → x : Complex
+• the imaginary unit i → I
+• complex number a + bi → a + b * I
 • real part of z∈ℂ → Re(z)
 • imaginary part of z∈ℂ → Im(z)
-• absolute value real x → abs(x)
 • magnitude of complex x → abs(x)
+[BLOCK]
+• absolute value of real x → abs(x)
+• ∞ → oo
 • the answer is; the expression e to solve for → goal = e  %% Mandatory
+
+ALL translations MUST include a line "goal = ..."!
 
 Functions either have closed form equations, or are unknown. Known functions are defined using Lambda, and don't need a type annotation:
 ```
-f = Lambda([x in Real], sin(2*x))  # x is a new bound variable
+x : Real  # We need an unknown variable to use inside Lambda
+f = Lambda(x, sin(2*x))
 ```
 Unknown functions must be declared using "f : Function(...)", and constraints on them are given using ForAll:
 ```
 f : Function([Int], Real)  # From Int to Real
-ForAll([x in Int], f(x) == -f(-x))  # f is an odd function. x is a new bound variable
+# f is an odd function
+ForAll(f(x) == -f(-x) for x in Int)  # x is a new bound variable
 ```
 
 Sequences, lists, and functions with integer domain (one arg of type Int) are the same thing and interchangeable.
 
-• h is a real-valued function with two args of type T1, T2 → h : Function([T1, T1], Real)
+[BLOCK] graphs
+• h is an real-valued function with two args of type T1, T2 → h : Function([T1, T1], Real)
+• define the function circ(x, y) = x^2 + y^2 → x, y : Real ; circ = Lambda((x, y), x^2 + y^2)
+• the derivative of an expression or function e wrt x → e.diff(x)  %% x must be declared
+[BLOCK]
 • x is an unbounded sequence of reals → x : Seq(Real)   %% Equivalent to "x : Function([Int], Real)
 • the length of a sequence q → len(q)  %% If q is infinite, len(q) = oo
 • an element x_i of x → x[i]   %% Equal to 0 if i >= len(x)
 • x is an unbounded unknown sequence of integers → x : Seq(Int)
 • x is a length n unknown sequence of integers, x_0, x_1, …, x_{n-1}  → x : Seq(Int, len = n)
+• the sequence of integers 4, …, 6 → range(4, 7)
+[BLOCK] seqs relations or combs
 • {x_i} is a sequence of integers for i ∈ 1, …, 32 → x : Seq(Real, start = 1, len = 32)
 • the sequence of integers 0, …, 9 → seq(0, 9)
-• the sequence of integers 4, …, 6 → range(4, 7)
 • list/sequence of two values x, y → [x, y]
 • the reversal of a finite sequence/list s → reversed(s)
+[BLOCK] seqs or ntheory
 • the sequence of digits of x in base b, starting with units at index 0 → digits(x, b)  %% E.g. digits(x, b) == x % b
+[BLOCK]
 
-Propositional expressions:
+The argument to "set, seq, sum, product, or argmax" can be a list comprehension ranging over a sequence or finite or infinite set (such as Int, Real, Complex, etc). For example "sum(x^2 for x in c)".
+
+ForAll, Exists
+, including all reals bound/index variables: , Set, Sum
+But these functions don't: set, sum, product).
+
+
+A proposition is any expression with a boolean value, such as "a > 2 and" or "is_prime(x)".
 • p and q → p and q
 • p or q → p or q
 • p if and only if q → p == q
 • p implies q → Implies(p, q)
 • if p then the value a else value b → If(p, a, b)   %% A simple piecewise function
 • the expression "f_1 if p_1, else f_2 if p_2, else f_3" → Piecewise((f_1, p_1), (f_2, p_2), (f3, True))
-• x is a prime number → is_prime(x)
 
-Some functions range over a list of one or more bound/index variables: ForAll, Exists, Lambda, Set, Sum, Product, Argmax,
-(but these functions don't: set, sum, product).
-For example "Sum([x in C], x^2)".
-The first argument is the list of index variables, each is a previously declared unknowns. Each list element is either:
-• a variable, any of its possible values (all integers, reals, etc): e.g. "x"
-• a variable, any element of a set: e.g. "x in S"
-• a variable and a predicate: "x and p(x)" e.g. "x and x>0"
-• both the above: "x in S and p(x)"
-The index variable MUST be declared first.
-
-Use ForAll and Exists to put constraints on sequences and unknown functions, for example the Fibonacci sequence:
+Use ForAll and Exists to put constraints on sequences, for example the Fibonacci sequence:
 ```
 fib : Seq(Int)
 fib[1] == fib[2] == 1
@@ -81,32 +98,29 @@ ForAll([i >= 3], fib[i] == fib[i - 1] + fib[i - 2])
 ```
 
 • x ∈ S → x in S
-• for every i ∈ S, p holds → ForAll([i in S], p)
-• for every i ∈ S, p holds → ForAll([i in S], p)
-• for all i and j, e holds → ForAll([i, j], e)
+• for every i ∈ S, p holds → ForAll(p for i in S)
+• for all reals i and j, e holds → ForAll(e for i in Real for j in Real)
 • sum of all elements of sequence/list L → sum(L)
-• sum of all L_i for i > 2 → Sum([i and i > 2], L[i])
+• sum of all L_i for i > 2 → sum(L[i] for i in Int and i > 2)
 • a series summation a_1 + a_2 + ... of sequence a → sum(a)
-• sum of all elements of list L → sum(L)
-• {x : p(x)}, the set of values x such that p(x) → Set([x and p(x)], x)
-• {e : x ∈ S Λ p(x)}, for x ∈ S, the set of values e(x) such that p(x) → Set([x in S and p(x)], e)
-• the set of pairs {(x, y) : p(x, y)} such that p → Set([x, y], p(x, y))  %% Any number of variables allowed
-• the range of function f(x) → Set([x], f(x))
-• x is the smallest value in set S → x == min(S)
-• the largest possible value of expression e → max(e)
-• the largest element of a sequence, set, or list of arguments → max(e)   %% E.g. max(1, x)
-• the value x for which f(x) attains the maximum → Argmax([x], f(x))  %% To restrict x to S: Argmax([x in S], f(x))
-• the size of set S → count(S)
-• the number of possible values of expression e → count(set(e))
-• the number of possible values of variables x and y such that p → count([x, y], p)
-
-ALL translations MUST include a line "goal = ..."!
+• P is a set of integers → P : Set(Int)
+• the size of set S → count(S)  %% Equivalent to len(S)
+• {x ∈ ℤ : p(x)}, the set of integers x such that p(x) → set(x for x in Int if p(x))
+• the set {e : x ∈ S Λ p(x)} → set(e for x in S and p(x))
+• the set of integer pairs {(x, y) | s.t. p(x, y)} → set([x, y] for x in Int for y in Int if p(x, y))
+• the range of function f(x) on the closed interval [a, b] → set(f(x) for x in Real if a <= x <= b)
+• the smallest element in set or sequence S → min(S)   %% max(S) is the largest
+• all possible values of expression e given all constraints → set(e)
+• the largest possible value of e → max(e)
+• the number of possible values of e → count(e)
+• the value x ∈ S for which f(x) attains the maximum → argmax(f(x) for x in S)
 
 [BLOCK] ntheory or comb
 Syntax lookup table:
 • greatest common divisor of x and y → gcd(x, y)
 • least common multiple of x and y → lcm(x, y)
 • x! → factorial(x)
+• x is a prime number → is_prime(x)
 • number of combinations x choose y → comb(x, y)
 • sum of numerator p and denominator q of a rational x written as p/q where gcd(p,q)=1 → sum(as_numer_denom(x))
 
@@ -161,8 +175,7 @@ Examples:
 
 STARTANSWER
 # Name the two integers a and b
-a : Int
-b : Int
+a, b : Int
 gcd(a, b) * lcm(a, b) == 180
 # The number of possible values of gcd(a, b):
 goal = count(gcd(a, b))
@@ -205,8 +218,10 @@ STARTANSWER
 # c is an unknown parameter
 c : Real
 # The functions f and g have known equations (although parameter c is unknown), so we can use Lambda to define them
-f = Lambda([x], 2*x - c)
-g = Lambda([x, t], (x + 1) / (t - x))
+x : Real
+f = Lambda(x, 2*x - c)
+t : Real
+g = Lambda((x, t), (x + 1) / (t - x))
 # The function h is recurrent so its closed form isn't known. So we can't define it with Lambda but instead must declare an unknown function and use ForAll
 h : Function([Real], Real)
 ForAll([t], h(t) == g(h(t - 1), f(t)))
@@ -299,8 +314,7 @@ ENDCODE
 
 STARTANSWER
 # Define a function to check if the digits of a number are the same forwards and backwards
-is_palindrome : Function([Int], Bool)
-is_palindrome = Lambda([i], digits(i, 10) == reversed(digits(i, 10)))
+is_palindrome = Lambda(i, digits(i, 10) == reversed(digits(i, 10)))
 # Let n be the four-digit palindrome
 n : Int
 len(digits(n, 10)) == 4
