@@ -21,7 +21,7 @@ os.makedirs(OUT_DIR, exist_ok = True)
 
 for dset in ("test", "train"):
 
-    df = pd.DataFrame(columns = ['prob_name', 'problem', 'level', 'subject', 'solution', 'answer'])
+    df = pd.DataFrame(columns = ['prob_name', 'problem', 'level', 'difficulty', 'subject', 'solution', 'answer'])
     lastlen = 0
 
     set_dir = SRC_DIR + "/" + dset
@@ -77,6 +77,7 @@ for dset in ("test", "train"):
                     continue
                 del data['type']  # eg "Counting & Probability"
                 data['subject'] = subject
+                data['difficulty'] = level - 1
                 assert prob_name not in df.index
                 df.loc[len(df)] = data
                 added += 1
