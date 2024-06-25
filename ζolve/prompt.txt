@@ -25,7 +25,7 @@ cards = 29
 • proposition p is a constraint → p  %% On a line by itself
 • x is positive → x > 0
 • two expressions are equal, a = b → a == b
-• multiplication, e.g. 2s(t+1) → 2*s * (t+1)  %% * must be used
+• multiplication and exponentiation, e.g. $2s^2(t+1)$ → 2*s^2 * (t+1)  %% * must be used
 [BLOCK] complex
 • x is a complex unknown → x : Complex
 • the imaginary unit i → I
@@ -117,6 +117,7 @@ ForAll([i >= 3], fib[i] == fib[i - 1] + fib[i - 2])
 
 [BLOCK] ntheory or comb
 Syntax lookup table:
+• p is a factor of q → q % p == 0
 • greatest common divisor of x and y → gcd(x, y)
 • least common multiple of x and y → lcm(x, y)
 • x! → factorial(x)
@@ -360,3 +361,9 @@ seats[i + 1] == son
 # The answer is the number of possible assignments to seats
 goal = count(seats)
 ENDCODE
+
+[BLOCK]
+### Statement
+"PROBLEM"
+
+STARTANSWER
