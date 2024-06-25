@@ -139,9 +139,10 @@ if (VLLM or QUANT) and not 'installed_libs' in globals():
     !pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
     installed_libs = True
     
-!pip install -U /kaggle/input/z3-python-wheel/z3_solver-4.12.5.0-py2.py3-none-manylinux2014_x86_64.whl
+!pip install -U /kaggle/input/z3-python-wheel/z3_solver-4.12.5.0-py2.py3-none-manylinux2014_x86_64.whl -qq
 
 # %%
+import sys
 import os
 import psutil
 import numpy as np
@@ -149,7 +150,6 @@ import pandas as pd
 from tqdm import tqdm
 import gc
 import re
-import sys
 import subprocess
 import math
 import random
@@ -161,6 +161,10 @@ import accelerate
 from torch import multiprocessing
 if VLLM:
     from vllm import LLM, SamplingParams
+
+sys.path.append('/kaggle/input/zolver/ζolve')
+import llm_prompting
+
 
 # %%
 if not PRIVATE:
@@ -503,7 +507,7 @@ def nvidia_pstate() -> str:
 # %%
 %%time
 transformers.set_seed(SEED)
-#multiprocessing.set_start_method("spawn")
+multiprocessing.set_start_method("spawn")
 
 
 def load_model(MODEL_PATH, QUANT, device_map = None):
@@ -1069,64 +1073,6 @@ class LLMGenerator:
 
 
 # %%
-# if VLLM: class LLMGenerator REMOVED
-
-# %%
-def test_gen(prompt, assist_prefix = "", max_tokens = 800, temp = 0.9, ret = True, use_stop=True, CHAT = False):
-    gen = LLMGenerator(model2, tokenizer2)
-    if CHAT:
-        gen.user_prompt(prompt, assist_prefix)
-    else:
-        gen.append_prompt(prompt)
-    gen.generate(temp, limit = max_tokens)
-    return gen.new_output.rstrip("\n")
-
-def test_model2():
-    prompt = '''### Instruction
-Please translate the following computer algebra code into English statements using patterns from the following lookup table:
-• greatest common divisor of x and y → gcd(x, y)
-• least common multiple of x and y → lcm(x, y)
-• x choose y combinations → comb(x, y)
-• x is a real unknown → x = variable()
-• x is an integer unknown → x = variable(integer = True)
-• x_i is an infinite sequence → x = seq()
-• x_i is a sequence for i ∈ 1, …, 32 → x = seq(limit = 32)
-• 1, …, 32 → range(1, 32)
-• x_i → x[i]
-• sum of x_i for i ∈ S → sum(x, S)
-• a = b → a == b
-• the sequence of digits of x in base b → digits(x, b)
-• for i sum of x_i for i ∈ S → sum(x, S)
-• equation or relation r is a constraint → constraint(r)
-• x is positive → constraint(x > 0)
-• x is prime → constraint(prime(x))
-• x is the smallest value in S → constraint(x == min(S))
-• the largest possible value of x → max(x)
-• the size of set S → max(S)
-• the number of possible solutions of relation r → count(r)
-• the number of possible values of x such that r holds → count(r, x)
-• find x → goal = x
-
-### statement
-"What is the first natural number after 42 that has a remainder of $5$ when divided by $7?"
-
-### code
-```
-a = variable(natural = True)
-constraint(a > 42)
-constraint(a % 7 == 5)
-goal = min(a)
-```
-
-### statement
-"A geometric sequence starts with $a_1 = 2$. If $a_4 = 6$ what is $a_9$?"
-
-### code'''
-    test_gen(prompt, max_tokens = 300)
-    
-test_model2()
-
-# %%
 if LOGGING:
     logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'score', 'answer', 'result_info', 'gen_tokens', 'code_blocks', 'code_errors', 'time', 'bad'])
     
@@ -1141,14 +1087,23 @@ def predict(probi, problem):
     firstprompt = random.randint(0, 9999)
     score = 0
     best = 0
-    outputs = []  # List of (answer, score, info) tuples
-    answer_scores = defaultdict(int)  # answer -> total_score
 
     time_left = TIME_LIMIT - (time.time() - NOTEBOOK_START_TIME)
     time_for_item = time_left / max(1, NPROBS - probi)
     item_time_start = time.time()
+
+    def model2makegen():
+        return LLMGenerator(model2, tokenizer2)
+
+    ζol = ζolver(problem)
+    solved = ζol.doit(model2makegen, timeout = min(time_for_item, 120), hard_timelimit = NOTEBOOK_START_TIME + TIME_LIMIT)
+    print(f"{int(item_time_start)}s spent in ζolve()")
+    #scorelog = llm_prompting.ScoreLog()
+    scorelog = ζol.scorelog
+    if solved:
+        return scorelog.best
+
     for jj in range(N_REPETITIONS): # tqdm(range(N_REPETITIONS)):
-        
 
         temperature = 0.9 * (0.3+0.25*jj) / (0.25*jj + 1)  # 0.27 0.40 0.48 0.54 0.59 0.62 0.65 ... 0.71
         #temperature = (0.35+0.25*jj) / (0.25*jj + 1)   # 0.35 0.48 0.57 .... 0.8
@@ -1492,26 +1447,15 @@ def predict(probi, problem):
 
         if result_output > -1:  # and not bad
             print(f"RESULT = {result_output} SCORE = {score}")
-            result_output = result_output % 1000
-            outputs.append((result_output, score, result_info))
-            answer_scores[result_output] += max(0, score)
+            best, best_score, score_gap = scorelog.add_answer(result_output, score, result_info)
 
-        if len(outputs) > 0:
-            answers = [(score,ans) for (ans,score) in answer_scores.items()]
-            answers.sort(reverse = True)
-            print("SCORES,ANSWERS:", answers)
-            best_score, best = answers[0]
-            if len(answers) >= 2:
-                score_gap = best_score - answers[1][0]
-            else:
-                score_gap = best_score
             #if best_score >= 3 and best_score >= 1 + (jj+1)/2:
             #if best_score > 4 and not VALIDATE:
             if (score_gap >= 3 or best_score >= 6) and not VALIDATE:
                 print("EARLY FINISH!")
                 break
 
-    print("\nAll outputs:", outputs)
+    print("\nAll outputs:", scorelog.outputs)
     return best
 
 

@@ -32,7 +32,7 @@ class ItDispleasesζ3(ValueError):
     pass
 
 
-set_param('timeout', 120000)  # ms
+set_param('timeout', 5000)  # ms
 set_param('memory_max_size', 700)  # MB  "hard upper limit for memory allocations"
 set_param('memory_high_watermark_mb', 700)  # MB  "high watermark for memory consumption"
 
