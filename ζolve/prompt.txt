@@ -1,116 +1,265 @@
 ### Instruction
 
-An expression is any formula such as "x * y" or "count([x], min(x))". A proposition is any expression with a boolean value, such as "a > 2 and" or "is_prime(x)".
-Unknowns must be declared before they are used.
-Please directly translate the following maths problem statements into the CASconstraint constraint-solving computer algebra system using the syntax given by the following lookup table (similar to python, sympy and z3):
+Please directly translate the following maths problem statement into code for the CASconstraint constraint-solving computer algebra system (CAS). CASconstraint syntax is very similar to python, sympy and z3. Use the following rules and "math → code" syntax lookup tables to translate.
+
+An expression is any formula such as "x * y" or "count([x], min(x))". An expression can include unknowns. A proposition is any expression with a boolean value, such as "a > 2 and" or "is_prime(x)".
+
+Unknown variables must be declared with type annotations before they are used. Choose appropriate variable names, single letters aren't necessary. You can also create ordinary variables without declarations using "x =" but it's better to create constraints "x == ...".
+
 • comment → # comment
-• greatest common divisor of x and y → gcd(x, y)
-• least common multiple of x and y → lcm(x, y)
-• x choose y combinations → comb(x, y)   %% x and y should be integer-valued
-• proposition p is a constraint → constraint(p)
-• x is a real unknown (or variable) → x : Real
+• create a new temporary variable (not an unknown) expr from for → a == b
 • x is an integer unknown → x : Int
-• x is positive → constraint(x > 0)
+• x is a real unknown → x : Real  %% Including rationals
 • x is a complex unknown → x : Complex
-• imaginary unit i → I
-• complex number ai + b → a * I + b
+• the imaginary unit i → I
+• complex number a + bi → a + b * I
+• proposition p is a constraint → p  %% On a line by itself
+• x is positive → x > 0
+• two expressions are equal, a = b → a == b
+• multiplication, e.g. 2s(t+1) → 2*s * (t+1)  %% * must be used
 • real part of z∈ℂ → Re(z)
 • imaginary part of z∈ℂ → Im(z)
-• the absolute value or magnitude of a real or complex value → abs(x)
-• a = b → a == b
-• x_i is an unbounded sequence of reals → x : Seq(Real)
-• x_i is an unbounded sequence of integers → x : Seq(Int)
-• x_i is a sequence of integers for i ∈ 1, …, 32 → x : Seq(Int, limit = 32)
-• the sequence of integers 1, …, 32 → seq(1, 32)
-• x_i → x[i]
-• sum of x_i for i ∈ S → sum([i], i in S, x[i])
-• a series a_1 + a_2 + ... → sum(a)  %% 'a' must be declared as a Seq
-• a pair of expressions (x, y) → [x, y]
-• the sequence of digits of x in base b → digits(x, b)
-• the set of possible values of an expression → set(e)
-• the set of values of x such that proposition p holds → set(x, p)
-• the set of pairs x, y such that proposition p holds → set([x, y], p)  %% Any number of variables allowed
-• x ∈ S → x in S
-• p implies q → Implies(p, q)
+• absolute value real x → abs(x)
+• magnitude of complex x → abs(x)
+• the answer is; the expression e to solve for → goal = e  %% Mandatory
+
+Sequences, lists, and functions with integer domain (one arg of type Int) are the same thing and interchangeable.
+
+Functions are unknown by default; translate the equation "f(x) = ..." to either "f == Lambda([x], ...)" or "ForAll([x], f(x) == ...)" after declaring f, e.g.:
+```
+f : Function([Real], Real)
+x : Real
+f == Lambda([x], sin(2*x))  # Equivalent to:  ForAll([x], f(x) == sin(2*x))
+goal = f(pi)
+```
+
+• x is an unbounded sequence of reals → x : Seq(Real)   %% Equivalent to "x : Function([Int], Real)
+• h is a real-valued function with two args of type T1, T2 → h : Function([T1, T1], Real)
+• function f has  f(s) = x^2 + 1 → f(s) == s^2 + 1
+• the length of a sequence q → len(q)  %% If q is infinite, len(q) = oo
+• an element x_i of x → x[i]   %% Equal to 0 if i >= len(x)
+• x is an unbounded unknown sequence of integers → x : Seq(Int)
+• {x_i} is a sequence of integers for i ∈ 1, …, 32 → x : Seq(Int, start = 1, end = 32)
+• the sequence of integers 0, …, 9 → seq(0, 9)
+• the sequence of integers 4, …, 6 → range(4, 7)
+• list/sequence of two values x, y → [x, y]
+• the reversal of a finite sequence/list s → reversed(s)
+• the sequence of digits of x in base b, starting with units at index 0 → digits(x, b)  %% E.g. digits(x, b) == x % b
+
+Propositional expressions:
 • p and q → p and q
 • p or q → p or q
-• p if and only if q → Iff(p, q)
-• if p then a else b → If(p, a, b)   %% This is an expression
-• for all i (one or more variables) such that constraint r holds, e → ForAll([i], r, e)
-• for all i and j, e holds → ForAll([i], True, e)
-• for all i ∈ S, p → ForAll([i], i in S, p)
-• x is a prime number → constraint(is_prime(x))
-• x is the smallest value in set S → constraint(x == min(S))
-• the largest possible value of an expression e → max(e)
+• p if and only if q → p == q
+• p implies q → Implies(p, q)
+• if p then the value a else value b → If(p, a, b)   %% A simple piecewise function
+• the expression "f_1 if p_1, else f_2 if p_2, else f_3" → Piecewise((f_1, p_1), (f_2, p_2), (f3, True))
+• x is a prime number → is_prime(x)
+
+Some functions range over a list of one or more bound/index variables: ForAll, Exists, Lambda, Set, Sum, Product, Argmax,
+(but these functions don't: set, sum, product).
+For example "Sum([x in C], x^2)".
+The first argument is the list of index variables, each is a previously declared unknowns. Each list element is either:
+• a variable, any of its possible values (all integers, reals, etc): e.g. "x"
+• a variable, any element of a set: e.g. "x in S"
+• a variable and a predicate: "x and p(x)" e.g. "x and x>0"
+• both the above: "x in S and p(x)"
+The index variable MUST be declared first.
+
+Use ForAll and Exists to put constraints on sequences and functions, for example the Fibonacci sequence:
+```
+fib : Seq(Int)
+fib[1] == fib[2] == 1
+i : Int
+ForAll([i >= 3], fib[i] == fib[i - 1] + fib[i - 2])
+```
+
+• x ∈ S → x in S
+• for every i ∈ S, p holds → ForAll([i in S], p)
+• for all i and j, e holds → ForAll([i, j], e)
+• sum of all elements of sequence/list L → sum(L)
+• sum of all L_i for i > 2 → Sum([i and i > 2], L[i])
+• a series summation a_1 + a_2 + ... of sequence a → sum(a)
+• sum of all elements of list L → sum(L)
+• {x : p(x)}, the set of values x such that p(x) → Set([x and p(x)], x)
+• {e : x ∈ S Λ p(x)}, for x ∈ S, the set of values e(x) such that p(x) → Set([x in S and p(x)], e)
+• the set of pairs {(x, y) : p(x, y)} such that p → Set([x, y], p(x, y))  %% Any number of variables allowed
+• the range of function f(x) → Set([x], f(x))
+• x is the smallest value in set S → x == min(S)
+• the largest possible value of expression e → max(e)
+• the largest element of a sequence, set, or list of arguments → max(e)   %% E.g. max(1, x)
+• the value x for which f(x) attains the maximum → Argmax([x], f(x))  %% To restrict x to S: Argmax([x in S], f(x))
 • the size of set S → count(S)
 • the number of possible values of expression e → count(set(e))
 • the number of possible values of variables x and y such that p → count([x, y], p)
-• find expression e → goal = e
 
-Use comments starting with '#' to explain how your translated variables and constraints correspond to the problem statement BUT give a *direct* tranlation into the algebra system, don't try to solve the problem!
+ALL translations MUST include a line "goal = ..."!
+
+Syntax lookup table:
+• greatest common divisor of x and y → gcd(x, y)
+• least common multiple of x and y → lcm(x, y)
+• x! → factorial(x)
+• number of combinations x choose y → comb(x, y)
+• sum of numerator p and denominator q of a rational x written as p/q where gcd(p,q)=1 → sum(as_numer_denom(x))
+
+You can use standard sympy types and functions for geometry. The CAS extends these for solving for unknowns:
+• p is an unknown point on the plane → p : Point   %% p has components p.x, p.y
+• S is an unknown polygon on the plane → P : Polygon
+• the polygon ABCD of points A, B, C, D → Polygon(A, B, C, D)  %% E.g. tri : Polygon ; tri = Polygon(base1, base2, peak)
+• a polygon P is regular → is_regular(P)
+• a regular polygon with N sides, center C, radius R (from center to vertices) → RegularPolygon(c = C, r = R, n = N)  %% All three arguments are optional, and can be unknown variables
+• S is an unknown circle on the plane → S : Circle    %% S has components S.center, S.radius
+• the circle with center c and radius r → Circle(c, r)
+• the circle passing through 3 points → Circle(p1, p2, p3)
+• a unknown straight line or segment AB → AB : Line
+• the line between points A, B : Line(A, B)
+• distance between points p1, p2 → distance(p1, p2)
+• distance between the nearest points of two sets of points (individual Points or Lines, Circles, etc) → distance
+• angle between lines AB, BC → angle(AB, BC)
+• the set of all points on the perimeter of shape S → perimeter(P)
+
+Angles are measured in radians
+• 50 degrees → deg2rad(50)
+• x radians to degress → rad2deg(x)
+
+A polygon P has components P.area, P.vertices, P.centroid, P.angles, P.sides, P.perimeter. For example:
+• area of polygon G → G.area
+• the set of interior angles of polygon G → G.angles
+
+Point and Vector(2) are the same and interchangeable.
+
+Types and functions for linear algebra are the same as sympy. For example:
+• v is a vector of length n, optional type T (defaults to Real) → v : Vector(n, T)  %% E.g. Vector(2, Int), Vector(3)
+• M is an n*m matrix, optional type T (defaults to Real) → M : Matrix(n, m, T)  %% E.g. Matrix(2, 2)
+• the matrix with rows 0 3 and 1 7 → Matrix([[0, 3], [1, 7]])
+• determinant of M → det(M)
+• the image of a Point v under a Matrix M → M @ v
+• the image of any shape (e.g. Line, Polygon) q under a 2x2 Matrix M → M @ q
+
+Use comments starting with '#' to explain how your translated variables and constraints correspond to the problem statement BUT give a *direct* translation into the algebra system, don't try to solve the problem!
 Make the translation as close as possible to the original English while following the correct syntax!
-Put all the relevant information in the problem statement into your translation. If a quantity or formula exists is mentioned in the problem it should be used in the translation!
+Put all the relevant information (needed to reach the answer) from the problem statement into your translation. So if a quantity or formula exists in the problem it should usually be in the translation!
+
+Examples:
 
 ### Statement
 "When the greatest common divisor and least common multiple of two integers are multiplied, the product is 180. How many different values could be the greatest common divisor of the two integers?"
 
-### CASconstraint Translation
-{startblock}
-# Let's name the two integers a and b:
+### TRANSHEADER
+STARTBLOCK
+# Name the two integers a and b
 a : Int
 b : Int
-constraint(gcd(a, b) * lcm(a, b) == 180)
+gcd(a, b) * lcm(a, b) == 180
 # The number of possible values of gcd(a, b):
 goal = count(gcd(a, b))
-{endblock}
+ENDBLOCK
 
 ### Statement
-"What is the first natural number after 42 that has a remainder of $5$ when divided by $7?"
+"What is the first natural number after 42 that has a remainder of $5$ when divided by $7$?"
 
-### CASconstraint Translation
-{startblock}
-# Call this natural number 'a'
+### TRANSHEADER
+STARTBLOCK
+# Call this number 'a'
 a : Int
-constraint(a > 42)
-constraint(a % 7 == 5)
+a > 42
+a % 7 == 5
 # The first such number is the minimum of all possible assignments to 'a'
 goal = min(a)
-{endblock}
+ENDBLOCK
 
 ### Statement
 "A geometric sequence starts with $a_1 = 2$. If $a_4 = 6$ what is $a_9$?""
 
-### CASconstraint Translation
-{startblock}
+### TRANSHEADER
+STARTBLOCK
 # In general, 'a' may contain real numbers
 a : Seq(Real)
 # A geometric sequence is defined by a[i] = r * a[i - 1]
 r : Real
 i : Int
-ForAll([i], i > 1, a[i] == r * a[i - 1])
-# Two elements of 'a' are given:
-constraint(a[1] == 2)
-constraint(a[4] == 6)
+ForAll([i > 1], a[i] == r * a[i - 1])
+# Two elements of a are given
+a[1] == 2
+a[4] == 6
 goal = a[9]
-{endblock}
+ENDBLOCK
 
 ### Statement
 "A complex number $x+yi$ has magnitude 2 when added to 3+4i. What's the minimum possible value of $x + y$?"
 
-### CASconstraint Translation
-{startblock}
+### TRANSHEADER
+STARTBLOCK
 # We can either use two Real variables x and y or a single Complex variable z = x+yi. A single variable is easier for arithmetic
 z : Complex
-constraint(abs(z + 3+4*I) == 2)
+abs(z + 3+4*I) == 2
 # We want to minimize x + y
 goal = min(Re(z) + Im(z))
-{endblock}
+ENDBLOCK
 
-### CASconstraint Translation
-{startblock}
+### TRANSHEADER
+STARTBLOCK
 # Alternatively, we can use reals, and the magnitude of a complex number z is defined as sqrt(Re(z)^2 + Im(z)^2)
 x : Real
 y : Real
-constraint(sqrt(((x+3)^2 + (y+4)^2) == 2)
+sqrt((x+3)^2 + (y+4)^2) == 2
 goal = min(x + y)
-{endblock}
+ENDBLOCK
+
+### Statement
+"What is the sum of all values of $y$ for which the expression $\frac{y+6}{y^2-5y+4}$ is undefined?"
+
+### TRANSHEADER
+STARTBLOCK
+# A fraction is undefined when the denominator is 0, so we need to solve y^2 - 5y + 4 = 0
+y : Real
+y^2 - 5*y + 4 == 0
+# Sum all solutions
+goal = sum(y)
+ENDBLOCK
+
+### Statement
+"Two adjacent vertices of a regular hexagon are (3, 4) and (5, 6) and it encloses the origin. What is the distance from its center to the origin?"
+
+### TRANSHEADER
+STARTBLOCK
+# Declare the hexagon
+hexagon : RegularPolygon(n = 6)
+# Define the first and second vertices
+Point(3, 4) == hexagon.vertices[0]
+Point(5, 6) == hexagon.vertices[1]
+origin : Point
+origin == Point(0, 0)
+hexagon.encloses(origin)
+goal = distance(hexagon.center, origin)
+ENDBLOCK
+
+### Statement
+"Find the smallest four-digit palindrome which is the square of another palindrome."
+
+### TRANSHEADER
+STARTBLOCK
+# Define a function to check if the digits of a number are the same forwards and backwards
+is_palindrome : Function([Int], Bool)
+is_palindrome == Lambda([i], digits(i, 10) == reversed(digits(i, 10)))
+# Let n be the four-digit palindrome
+n : Int
+len(digits(n, 10)) == 4
+is_palindrome(n)
+# n is a square of another palindrome, call it m
+m : Int
+n == m^2
+# Find the smallest n
+goal = min(n)
+ENDBLOCK
+
+### Statement
+"The angles of quadrilateral $ABCD$ satisfy  $\angle A = 2\angle B = 3\angle C = 4\angle D$.  What is the degree measure of $\angle A$, rounded to the nearest whole number?"
+### TRANSHEADER
+# Define the variables for the angles measured in degrees
+A, B, C, D : Real
+# The given relationship between the angles
+A == 2 * B == 3 * C == 4 * D
+# The sum of the angles in a quadrilateral is 360 degrees
+sum(A, B, C, D) == 360
+# Round A to an integer
+goal = round(A)
