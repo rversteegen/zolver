@@ -4,7 +4,12 @@ Please directly translate the following maths problem statement into code for th
 
 An expression is any formula such as "x * y" or "count([x], min(x))". An expression can include unknowns. A proposition is any expression with a boolean value, such as "a > 2 and" or "is_prime(x)".
 
-Unknown variables must be declared with type annotations before they are used. Choose appropriate variable names, single letters aren't necessary. You can also create ordinary variables without declarations using "x =" but it's better to create constraints "x == ...".
+Unknown variables must be declared with type annotations before they are used. Choose appropriate variable names, single letters aren't necessary.
+
+Known quantities can be named as variables using "=" without a type annoatation. For example to create an enumeration of 3 colors as constants 0, 1, 2:
+```
+red, green, blue = range(3)
+```
 
 • comment → # comment
 • create a new temporary variable (not an unknown) expr from for → a == b
@@ -23,24 +28,25 @@ Unknown variables must be declared with type annotations before they are used. C
 • magnitude of complex x → abs(x)
 • the answer is; the expression e to solve for → goal = e  %% Mandatory
 
+Functions either have closed form equations, or are unknown. Known functions are defined using Lambda, and don't need a type annotation:
+```
+f = Lambda([x in Real], sin(2*x))  # x is a new bound variable
+```
+Unknown functions must be declared using "f : Function(...)", and constraints on them are given using ForAll:
+```
+f : Function([Int], Real)  # From Int to Real
+ForAll([x in Int], f(x) == -f(-x))  # f is an odd function. x is a new bound variable
+```
+
 Sequences, lists, and functions with integer domain (one arg of type Int) are the same thing and interchangeable.
 
-Functions are unknown by default; translate the equation "f(x) = ..." to either "f == Lambda([x], ...)" or "ForAll([x], f(x) == ...)" after declaring f, e.g.:
-```
-f : Function([Real], Real)
-x : Real
-f == Lambda([x], sin(2*x))  # Equivalent to:  ForAll([x], f(x) == sin(2*x))
-goal = f(pi)
-```
-
-• x is an unbounded sequence of reals → x : Seq(Real)   %% Equivalent to "x : Function([Int], Real)
 • h is a real-valued function with two args of type T1, T2 → h : Function([T1, T1], Real)
-• function f has  f(s) = x^2 + 1 → f(s) == s^2 + 1
+• x is an unbounded sequence of reals → x : Seq(Real)   %% Equivalent to "x : Function([Int], Real)
 • the length of a sequence q → len(q)  %% If q is infinite, len(q) = oo
 • an element x_i of x → x[i]   %% Equal to 0 if i >= len(x)
 • x is an unbounded unknown sequence of integers → x : Seq(Int)
-• x is a length n unknown sequence of integers, x_0, x_1, …, x_{n-1}  → x : Seq(Int, length = n)
-• {x_i} is a sequence of integers for i ∈ 1, …, 32 → x : Seq(Real, start = 1, length = 32)
+• x is a length n unknown sequence of integers, x_0, x_1, …, x_{n-1}  → x : Seq(Int, len = n)
+• {x_i} is a sequence of integers for i ∈ 1, …, 32 → x : Seq(Real, start = 1, len = 32)
 • the sequence of integers 0, …, 9 → seq(0, 9)
 • the sequence of integers 4, …, 6 → range(4, 7)
 • list/sequence of two values x, y → [x, y]
@@ -149,11 +155,11 @@ Put all the relevant information (needed to reach the answer) from the problem s
 
 Examples:
 
+[BLOCK]
 ### Statement
 "When the greatest common divisor and least common multiple of two integers are multiplied, the product is 180. How many different values could be the greatest common divisor of the two integers?"
 
-### TRANSHEADER
-STARTCODE
+STARTANSWER
 # Name the two integers a and b
 a : Int
 b : Int
@@ -165,8 +171,7 @@ ENDCODE
 ### Statement
 "What is the first natural number after 42 that has a remainder of $5$ when divided by $7$?"
 
-### TRANSHEADER
-STARTCODE
+STARTANSWER
 # Call this number 'a'
 a : Int
 a > 42
@@ -179,8 +184,7 @@ ENDCODE
 ### Statement
 "A geometric sequence starts with $a_1 = 2$. If $a_4 = 6$ what is $a_9$?""
 
-### TRANSHEADER
-STARTCODE
+STARTANSWER
 # In general, 'a' may contain real numbers
 a : Seq(Real)
 # A geometric sequence is defined by a[i] = r * a[i - 1]
@@ -193,12 +197,46 @@ a[4] == 6
 goal = a[9]
 ENDCODE
 
+[BLOCK]
+### Statement
+"Let $f(x) = 2x - c$ and $g(x, t) = $\frac{x + 1}{t - x}$ and $h(t) = g(h(t - 1), f(t))$. If $h(0) = 0$ what is $h(c)$?"
+
+STARTANSWER
+# c is an unknown parameter
+c : Real
+# The functions f and g have known equations (although parameter c is unknown), so we can use Lambda to define them
+f = Lambda([x], 2*x - c)
+g = Lambda([x, t], (x + 1) / (t - x))
+# The function h is recurrent so its closed form isn't known. So we can't define it with Lambda but instead must declare an unknown function and use ForAll
+h : Function([Real], Real)
+ForAll([t], h(t) == g(h(t - 1), f(t)))
+# h(0) is given
+h(0) == 0
+# Find h(c)
+goal = h(c)
+ENDCODE
+
+[BLOCK] seqs or relations
+### Statement
+"The sum of the geometric series $-1 + 3 - 9 + 27 - \\cdots + k is -44287. What is k?"
+
+STARTANSWER
+# This is a finite geometric series of unknown length n. Call the sequence of terms s_1, ..., s_n
+n : Int
+s : Seq(Int, start = 1, len = n)
+# s_1 = -1
+s[1] == -1
+# The common ratio of s is -3
+ForAll([i > 1], s[i] == -1 * -3 ^ (i - 1))
+# Find s[n]
+goal = s[n]
+ENDCODE
+
 [BLOCK] complex
 ### Statement
-"A complex number $x+yi$ has magnitude 2 when added to 3+4i. What's the minimum possible value of $x + y$?"
+"A complex number $x+yi$ has magnitude 2 when added to $3+4i$. What's the minimum possible value of $x + y$?"
 
-### TRANSHEADER
-STARTCODE
+STARTANSWER
 # We can either use two Real variables x and y or a single Complex variable z = x+yi. A single variable is easier for arithmetic
 z : Complex
 abs(z + 3+4*I) == 2
@@ -206,8 +244,7 @@ abs(z + 3+4*I) == 2
 goal = min(Re(z) + Im(z))
 ENDCODE
 
-### TRANSHEADER
-STARTCODE
+STARTANSWER
 # Alternatively, we can use reals, and the magnitude of a complex number z is defined as sqrt(Re(z)^2 + Im(z)^2)
 x : Real
 y : Real
@@ -219,8 +256,7 @@ ENDCODE
 ### Statement
 "What is the sum of all values of $y$ for which the complex function $\frac{y+6}{y^2-5y+4}$ is undefined?"
 
-### TRANSHEADER
-STARTCODE
+STARTANSWER
 # A fraction is undefined when the denominator is 0, so we need to solve y^2 - 5y + 4 = 0
 y : Complex
 y^2 - 5*y + 4 == 0
@@ -232,8 +268,7 @@ ENDCODE
 ### Statement
 "Two adjacent vertices of a regular hexagon are (3, 4) and (5, 6) and it encloses the origin. What is the distance from its center to the origin?"
 
-### TRANSHEADER
-STARTCODE
+STARTANSWER
 # Declare the hexagon
 hexagon : RegularPolygon(n = 6)
 # Define the first and second vertices
@@ -247,13 +282,25 @@ ENDCODE
 
 [BLOCK] ntheory or seqs
 ### Statement
+"When the base-10 integers 200 and 1200 are expressed in base 2, how many more digits does 1200 have than 200 (after being converted)?"
+
+STARTANSWER
+# The digits of 200 in base 2 is the sequence:
+digits_a = digits(200, 2)
+# The digits of 1200 in base 2 is the sequence:
+digits_b = digits(1200, 2)
+# Find the difference in lengths
+goal = len(digits_b) - len(digits_a)
+ENDCODE
+
+[BLOCK] ntheory seqs or graphs
+### Statement
 "Find the smallest four-digit palindrome which is the square of another palindrome."
 
-### TRANSHEADER
-STARTCODE
+STARTANSWER
 # Define a function to check if the digits of a number are the same forwards and backwards
 is_palindrome : Function([Int], Bool)
-is_palindrome == Lambda([i], digits(i, 10) == reversed(digits(i, 10)))
+is_palindrome = Lambda([i], digits(i, 10) == reversed(digits(i, 10)))
 # Let n be the four-digit palindrome
 n : Int
 len(digits(n, 10)) == 4
@@ -269,8 +316,7 @@ ENDCODE
 ### Statement
 "The angles of quadrilateral $ABCD$ satisfy $\angle A = 2\angle B = 3\angle C = 4\angle D$. What is the degree measure of $\angle A$, rounded to the nearest whole number?"
 
-### TRANSHEADER
-STARTCODE
+STARTANSWER
 # Define the variables for the angles measured in degrees
 A, B, C, D : Real
 # The given relationship between the angles
@@ -285,10 +331,9 @@ ENDCODE
 ### Statement
 "The Smith family has 4 sons and 3 daughters. In how many ways can they be seated in a row of 7 chairs such that at least 2 boys are next to each other?"
 
-### TRANSHEADER
-STARTCODE
+STARTANSWER
 # The order of the sons and daughters doesn't matter, only whether each seat has a son or a daughter. Represent the seats as a list of 7 numbers
-seats : Seq(Int, length = 7)
+seats : Seq(Int, len = 7)
 # Define seat labels 'son', 'daughter'
 son = 0
 daughter = 1

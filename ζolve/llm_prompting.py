@@ -2,12 +2,17 @@
 INDIR = "/kaggle/input/olve-prompts/"
 
 def build_prompt(filename = INDIR + "prompt.txt", sections = ['seqs', 'graphs', 'complex', 'ntheory'], startcode = '```', endcode = '```', maxlength = 10000):
+
+    startanswer = "### CAS Translation\n" + startcode
+
     with open(filename) as pfile:
         lines = pfile.read()
 
     selected = ""
     including = True
     for line in lines.split("\n"):
+        if line.startswith('[NOTE]'):
+            continue
         if line.startswith('[BLOCK]'):
             if len(selected) > maxlength:
                 print("build_prompt: Reached maxlength!!")
@@ -22,11 +27,11 @@ def build_prompt(filename = INDIR + "prompt.txt", sections = ['seqs', 'graphs', 
             selected += line + "\n"
 
     prompt = selected
-    prompt = prompt.replace('STARTCODE', startcode).replace('ENDCODE', endcode).replace("TRANSHEADER", "CAS Translation")
+    prompt = prompt.replace('STARTCODE', startcode).replace('ENDCODE', endcode).replace("STARTANSWER", startanswer)
 
     return prompt
 
-#print(build_prompt("prompt.txt"))
+print(build_prompt("prompt.txt"))
 
 def topic_query(gen, problem):
     "gen is a fresh LLMGenerator"
