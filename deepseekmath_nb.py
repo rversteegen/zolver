@@ -28,8 +28,6 @@
 
 
 # %%
-
-# %%
 ### %%time
 import os
 # Try reduce wasted memory due to small 11MB allocations consuming 20MB blocks
@@ -49,6 +47,7 @@ SLOW = True # = PRIVATE
 LOGGING = not PRIVATE
 #VALIDATE, DSET_TAG = "AMC_12_valid", "AMC12V"
 VALIDATE, DSET_TAG = "AIME_test24", "AIME24"
+MAX_DIFFICULTY = 5
 
 VLLM = False
 
@@ -65,26 +64,29 @@ if QUANT:  #Fits on one device
 
 
 USE_PAST_KEY = True
-SEED = 317
+SEED = 320
 MODEL_PATH = "/kaggle/input/deepseek-math"
+MISTRAL = False
 LLEMMA = False   # LLEMMA tokenizer
 RELOAD_MODEL = False   # For interactive run-all
 DEVICE = 'cuda' #if torch.cuda.is_available() else 'cpu'
-N_REPETITIONS = 10 if VALIDATE else (20 if SLOW else 1)   # 6
-MAX_SINGLE_GEN_TOKENS = 1800 if VLLM else 2048
-MAX_GEN_TOKENS = 1400 if SLOW else 500  #CHANGE
+N_REPETITIONS = 3 if VALIDATE else (30 if SLOW else 1)   # 6
+MAX_SINGLE_GEN_TOKENS = 1400
+MAX_GEN_TOKENS = 1600 if SLOW else 500
 #MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
 MAX_TOKENS = 2048
 
+MODEL_PATH2 = '/kaggle/input/download-embeddedllm-mistral-7b-merge-14-v0-4/EmbeddedLLM-Mistral-7B-Merge-14-v0.4/'
+QUANT2 = False
 
-FIRSTPROB = 30  # ignored for PRIVATE
+FIRSTPROB = 20  # ignored for PRIVATE
 
 if PRIVATE:
     NPROBS = 50
     TIME_LIMIT = 31000
 elif VALIDATE:
     NPROBS = 13 #100
-    TIME_LIMIT = 13000
+    TIME_LIMIT = 8000
 else:
     NPROBS = 1  #10
     TIME_LIMIT = 450
@@ -110,6 +112,8 @@ if FIRSTPROB:
     LOG_TAG += f"{FIRSTPROB}-{FIRSTPROB + NPROBS}"
 else:
     LOG_TAG += f"{NPROBS}"
+if MAX_DIFFICULTY < 9:
+    LOG_TAG += f"(d{MAX_DIFFICULTY})"
 LOG_TAG += f"of{DSET_TAG}_Q{QUANT if QUANT else 'off'}_{MAX_GEN_TOKENS}-{MAX_SINGLE_GEN_TOKENS}tok"
 if P100:
     LOG_TAG += "_P100"
@@ -135,7 +139,7 @@ if (VLLM or QUANT) and not 'installed_libs' in globals():
     !pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
     installed_libs = True
     
-
+!pip install -U /kaggle/input/z3-python-wheel/z3_solver-4.12.5.0-py2.py3-none-manylinux2014_x86_64.whl
 
 # %%
 import os
@@ -186,6 +190,9 @@ if not PRIVATE:
 
                 if VALIDATE:
                     self.prob_id = self.df['prob_name'][self.counter]
+                    if self.df['difficulty'][self.counter] > MAX_DIFFICULTY:
+                        self.counter += 1
+                        continue
                 else:
                     self.prob_id = self.df['id'][self.counter]
                 print("\n\n\n\n############# env: Prob", self.counter, "of", VALIDATE, "ground_truth =", self.df['ground_truth'][self.counter], "###########")
@@ -458,6 +465,7 @@ def show_model_mem(model):
     class MemUse: params, bufs = 0, 0
     counts = defaultdict(MemUse)
     for buf in model.parameters():
+        print("size", buf.numel() * buf.itemsize)
         counts[buf.device].params += buf.numel() * buf.itemsize
     for buf in model.buffers():
         counts[buf.device].bufs += buf.numel() * buf.itemsize
@@ -498,7 +506,7 @@ transformers.set_seed(SEED)
 #multiprocessing.set_start_method("spawn")
 
 
-def load_model(MODEL_PATH):
+def load_model(MODEL_PATH, QUANT, device_map = None):
     model_kwargs = {}
 
     if QUANT == 4:
@@ -536,31 +544,29 @@ def load_model(MODEL_PATH):
         config.gradient_checkpointing = True # Enable gradient checkpointing for memory optimization
         config.pad_token_id = tokenizer.pad_token_id
 
-        LAYERS_GPU0 = 32 if P100 else 15
-        device_map = [('model.embed_tokens', 0)] + [(f'model.layers.{i}', 0 if i < LAYERS_GPU0 else 1) for i in range(0, 31 + 1)] + [
-                         ('model.norm', 1),
-                         ('lm_head', 1)]
-        device_map = {ii:jj for (ii,jj) in device_map}
+        if device_map is None:
+            LAYERS_GPU0 = 32 if P100 else 15
+            device_map = [('model.embed_tokens', 0)] + [(f'model.layers.{i}', 0 if i < LAYERS_GPU0 else 1) for i in range(0, 31 + 1)] + [
+                             ('model.norm', 1),
+                             ('lm_head', 1)]
+            device_map = {ii:jj for (ii,jj) in device_map}
 
-        if SINGLE_GPU:
-            #model_kwargs['device_map'] = "auto"
-            model_kwargs['device_map'] = "cuda:0" #"sequential"
-            #model_kwargs['device_map'] = device_map
-        else:
-            model_kwargs['device_map'] = device_map
+            if SINGLE_GPU:
+                #model_kwargs['device_map'] = "auto"
+                device_map = "cuda:0" #"sequential"
+                #model_kwargs['device_map'] = device_map
+           
+        model_kwargs['device_map'] = device_map
 
-        if not 'model' in globals() or RELOAD_MODEL:
-            model = None
-            gc.collect()
-            torch.cuda.empty_cache()
-            model = transformers.AutoModelForCausalLM.from_pretrained(
-                MODEL_PATH,
-                torch_dtype="auto",
-                #use_flash_attention_2=True,
-                trust_remote_code=True,
-                config=config,
-                **model_kwargs
-            )
+
+        model = transformers.AutoModelForCausalLM.from_pretrained(
+            MODEL_PATH,
+            torch_dtype="auto",
+            #use_flash_attention_2=True,
+            trust_remote_code=True,
+            config=config,
+            **model_kwargs
+        )
 
         # Disable memory-efficient sparse tensors for CUDA operations
         torch.backends.cuda.enable_mem_efficient_sdp(False)
@@ -573,13 +579,20 @@ def load_model(MODEL_PATH):
         show_model_mem(model)
         return model, tokenizer
 
-model, tokenizer = load_model(MODEL_PATH)
+if not 'model' in globals() or RELOAD_MODEL:
+    model = None
+    gc.collect()
+    torch.cuda.empty_cache()
+if model is None:
+    model, tokenizer = load_model(MODEL_PATH, QUANT)
+
+model2, tokenizer2 = load_model(MODEL_PATH2, QUANT2, "auto")
         
 show_gpu_mem()
 
 
 # %%
-def llemma_tok_line(line):
+def safe_tok_line(line, tokenizer):
     "Removes the leading newline"
     print(repr(line))
     remove_nl = False
@@ -593,15 +606,15 @@ def llemma_tok_line(line):
     return torch.tensor(toks[start:])
 
 class StoppingCriteriaSub(transformers.StoppingCriteria):
-    def __init__(self, stops = [], allows = [], llemma = LLEMMA):
+    def __init__(self, model, tokenizer, stops, allows = [], need_safetok = LLEMMA or MISTRAL):
         super().__init__()
         
         self.allows = [tokenizer(word, return_tensors='pt', add_special_tokens=False)['input_ids'][0].to(model.device) for word in allows]
         self.stop_words = []
         self.stops = []
         for stop_word in stops:
-            if llemma:
-                toks = llemma_tok_line(stop_word)
+            if need_safetok:
+                toks = safe_tok_line(stop_word)
             else:
                 toks = tokenizer(stop_word, return_tensors='pt', add_special_tokens=False)['input_ids'][0]
             if stop_word.endswith("DROP"):
@@ -629,9 +642,10 @@ class StoppingCriteriaSub(transformers.StoppingCriteria):
         return False
     
 class NGramStoppingCriteria(transformers.StoppingCriteria):
-    def __init__(self, ngram_size):
+    def __init__(self, ngram_size, spacing = 4):
         super().__init__()
         self.ngram_size = ngram_size
+        self.spacing = spacing
         self.reset()
         
     def reset(self):
@@ -644,40 +658,39 @@ class NGramStoppingCriteria(transformers.StoppingCriteria):
         assert _scores is None
         if self.inside_code:
             return False
-        if len(input_ids[0]) < self.startlen + self.ngram_size:
+        if len(input_ids[0]) <self.ngram_size: #  + self.startlen + 
             # Too close to the start of this text block, contains part of previous code/output
             return False
-        suffix = tuple(input_ids[0][-self.ngram_size:].tolist())
+        suffix = tuple(input_ids[0][-self.ngram_size::self.spacing].tolist())
         #if "```" in suffix:
         if suffix in self.ngrams:
             self.signalled = True
             return True
         self.ngrams.add(suffix)
         return False
-                
+    
     
 BEFORE_DOCSTRING = "():\n   "  # 3 spaces! A 4th space is part of the next token!
 
 # ```->[10897], ````->[4885, 4885], `````->[4885, 10897], ``````->[4885, 4885, 4885]
 stop_words = ["```output", "```python", "```\nOutput" , ")\n```" , ")\n\n```" , "```\n", "````"] #, BEFORE_DOCSTRING]
-main_stoplist = StoppingCriteriaSub(stop_words)
-error_stoplist = StoppingCriteriaSub([" error", " mistake"], [" trial and error"])
-ngram_stopper = NGramStoppingCriteria(40)
+main_stoplist = StoppingCriteriaSub(model, tokenizer, stop_words)
+error_stoplist = StoppingCriteriaSub(model, tokenizer, [" error", " mistake"], [" trial and error"])
+ngram_stopper = NGramStoppingCriteria(140)
 
-#stopping_criteria = transformers.StoppingCriteriaList([ngram_stopper, main_stoplist])
-#error_stopping_criteria = transformers.StoppingCriteriaList([ngram_stopper, main_stoplist, error_stoplist])
+stopping_criteria = transformers.StoppingCriteriaList([ngram_stopper, main_stoplist])
+error_stopping_criteria = transformers.StoppingCriteriaList([ngram_stopper, main_stoplist, error_stoplist])
 
-stopping_criteria = transformers.StoppingCriteriaList([main_stoplist])
-error_stopping_criteria = transformers.StoppingCriteriaList([main_stoplist, error_stoplist])
+#stopping_criteria = transformers.StoppingCriteriaList([main_stoplist])
+#error_stopping_criteria = transformers.StoppingCriteriaList([main_stoplist, error_stoplist])
 
 #torch.cuda.empty_cache()
 #gc.collect()
 
 class GenStreamWatcher(transformers.generation.streamers.BaseStreamer):
-    def __init__(self, tokenizer):
+    def __init__(self):
         self.start_time = None
         self.tokens = []
-        self.tokenizer = tokenizer
         
     def put(self, token_ids):
         # First the prompt is fed in, before KVs are built for it.
@@ -686,7 +699,7 @@ class GenStreamWatcher(transformers.generation.streamers.BaseStreamer):
             if self.start_time is None:
                 #print("stream start")
                 self.start_time = time.time()
-            #print(self.tokenizer.decode(token_ids), end='')
+            #print(tokenizer.decode(token_ids), end='')
         
     def end(self):
         pass
@@ -879,14 +892,11 @@ prompt_options = [compute0, elab0tool]
 prompt_options = [compute0, tool0, analy2] # 16
 prompt_options = [compute0, tool0, tool1, steps1, analy2]  #, elab0tool, ]
 prompt_options = [tool1, analy2] # 21, 17, X16
-prompt_options = [elab0tool]
-#prompt_options = [tool1, analy2, compute0]
+prompt_options = [elab0tool, tool1]
+#prompt_options = [tool1, elab0tool, compute0]   # for validation
 
 # %% [markdown]
 # # Generation and main loop
-
-# %%
-
 
 # %%
 
@@ -921,7 +931,7 @@ class LLMGenerator:
         self.prompt = self.tokenizer.decode(self.tokens, skip_special_tokens = False)
         self.need_update = False
         
-    def user_prompt(self, text, assist_prefix = ""):
+    def user_prompt(self, text, assist_prefix = "", show = True):
         """Add `text` to the prompt as a User message, followed by Assistant:, and optionally start of assistant response.
         Call this before the first .generate() or at any time to add a User direction."""
         old_input = len(self.tokens)
@@ -944,15 +954,17 @@ class LLMGenerator:
             self.model_inputs = self.tokenizer.apply_chat_template(self.messages, add_generation_prompt=True, return_tensors="pt").to(self.model.device)
 
         self.update_inputs()
-        print(f"<<<<<PROMPT {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + self.prompt[ol:] + ">>>>>")
+        if show:
+            print(f"<<<<<PROMPT {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + self.prompt[ol:] + ">>>>>")
 
-    def append_prompt(self, text):
+    def append_prompt(self, text, show = True):
         "Append to prompt, without changing the role."
         text = text.rstrip(' ')
         self.prompt += text
         old_input = len(self.tokens)
         self.update_inputs()
-        print(f"<<<<<APPEND {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + text + ">>>>>")
+        if show:
+            print(f"<<<<<APPEND {len(self.tokens) - old_input} tokens ({len(self.tokens)} total)\n" + text + ">>>>>")
         
     def replace_tokens(self, new_tokens):
         self.tokens = new_tokens
@@ -968,7 +980,7 @@ class LLMGenerator:
         max_toks = min(MAX_SINGLE_GEN_TOKENS, MAX_TOKENS - len(self.tokens), MAX_GEN_TOKENS - self.num_gen_tokens)
         return max_toks
 
-    def generate(self, temperature = 0.9, top_p = 1.0, limit = 9999):
+    def generate(self, temperature = 0.9, top_p = 1.0, limit = 9999, show = True):
         startt = time.time()
         max_toks = self.check_limit()
         if max_toks < 3:
@@ -1044,15 +1056,75 @@ class LLMGenerator:
             print("HIT MAX_TOKENS")
             self.hit_limit = True
 
-        print(f"<<<<<GEN {new_toks} tokens ({len(self.tokens)} total) in {gentime :.2f}+{runt - gentime :.2f}s ({(new_toks-1)/gentime :.2f} tok/s) ({cpu_time()}) {gpu_mem()} {nvidia_pstate()}\n"
-              + self.new_output
-              + ">>>>>")
+        if show:
+            print(f"<<<<<GEN {new_toks} tokens ({len(self.tokens)} total) in {gentime :.2f}+{runt - gentime :.2f}s ({(new_toks-1)/gentime :.2f} tok/s) ({cpu_time()}) {gpu_mem()} {nvidia_pstate()}\n"
+                  + self.new_output
+                  + ">>>>>")
 
     def endswith(self, text):
         return self.prompt.endswith(text)
     
     def set_bad_words(self, words: list):
         self.bad_words = self.tokenizer(words, add_special_tokens = False)['input_ids']
+
+
+# %%
+# if VLLM: class LLMGenerator REMOVED
+
+# %%
+def test_gen(prompt, assist_prefix = "", max_tokens = 800, temp = 0.9, ret = True, use_stop=True, CHAT = False):
+    gen = LLMGenerator(model2, tokenizer2)
+    if CHAT:
+        gen.user_prompt(prompt, assist_prefix)
+    else:
+        gen.append_prompt(prompt)
+    gen.generate(temp, limit = max_tokens)
+    return gen.new_output.rstrip("\n")
+
+def test_model2():
+    prompt = '''### Instruction
+Please translate the following computer algebra code into English statements using patterns from the following lookup table:
+• greatest common divisor of x and y → gcd(x, y)
+• least common multiple of x and y → lcm(x, y)
+• x choose y combinations → comb(x, y)
+• x is a real unknown → x = variable()
+• x is an integer unknown → x = variable(integer = True)
+• x_i is an infinite sequence → x = seq()
+• x_i is a sequence for i ∈ 1, …, 32 → x = seq(limit = 32)
+• 1, …, 32 → range(1, 32)
+• x_i → x[i]
+• sum of x_i for i ∈ S → sum(x, S)
+• a = b → a == b
+• the sequence of digits of x in base b → digits(x, b)
+• for i sum of x_i for i ∈ S → sum(x, S)
+• equation or relation r is a constraint → constraint(r)
+• x is positive → constraint(x > 0)
+• x is prime → constraint(prime(x))
+• x is the smallest value in S → constraint(x == min(S))
+• the largest possible value of x → max(x)
+• the size of set S → max(S)
+• the number of possible solutions of relation r → count(r)
+• the number of possible values of x such that r holds → count(r, x)
+• find x → goal = x
+
+### statement
+"What is the first natural number after 42 that has a remainder of $5$ when divided by $7?"
+
+### code
+```
+a = variable(natural = True)
+constraint(a > 42)
+constraint(a % 7 == 5)
+goal = min(a)
+```
+
+### statement
+"A geometric sequence starts with $a_1 = 2$. If $a_4 = 6$ what is $a_9$?"
+
+### code'''
+    test_gen(prompt, max_tokens = 300)
+    
+test_model2()
 
 # %%
 if LOGGING:
@@ -1077,9 +1149,9 @@ def predict(probi, problem):
     item_time_start = time.time()
     for jj in range(N_REPETITIONS): # tqdm(range(N_REPETITIONS)):
         
-        
-        #temperature = 0.9 * (0.3+0.25*jj) / (0.25*jj + 1)  # 0.27 0.40 0.48 0.54 0.59 0.62 0.65 ... 0.71
-        temperature = (0.35+0.25*jj) / (0.25*jj + 1)   # 0.35 0.48 0.57 .... 0.8
+
+        temperature = 0.9 * (0.3+0.25*jj) / (0.25*jj + 1)  # 0.27 0.40 0.48 0.54 0.59 0.62 0.65 ... 0.71
+        #temperature = (0.35+0.25*jj) / (0.25*jj + 1)   # 0.35 0.48 0.57 .... 0.8
         temperature_coding = temperature
         
         it_start_time = time.time()
@@ -1105,6 +1177,8 @@ def predict(probi, problem):
             logrow.problem_id = env.prob_id
         
         last_code_error = None
+        last_code_output = None
+        code_repeat_count = 0
         code_status = True
         code_error_count = 0
         code_blocks = 0
@@ -1119,7 +1193,7 @@ def predict(probi, problem):
         cumulative_code = ""
         
         try:
-            gen = LLMGenerator()
+            gen = LLMGenerator(model, tokenizer, True)
             gen.set_bad_words([' """', " '''", '():\n    r'])  # disallow  r""" too
 
             promptname, prompt, assist = prompt_options[(firstprompt+jj) % len(prompt_options)]  #random.choice(prompt_options)
@@ -1256,6 +1330,17 @@ def predict(probi, problem):
                                 new_len = len(code_output)
                                 code_output = code_output[prev_code_len:].strip()
                                 prev_code_len = new_len
+                                print("CODE new_len =", new_len)
+                                if code_output and code_output == last_code_output:
+                                    code_repeat_count += 1
+                                else:
+                                    code_repeat_count = 1
+                                last_code_output = code_output
+                                if code_repeat_count >= 3:  # Same output three times
+                                    # Not bad
+                                    print("REPEATED OUTPUT")
+                                    result_info = "repoutput"
+                                    break
                                 try:
                                     last_code_result = round(float(eval(code_output.strip().split("\n")[-1])))
                                 except:
@@ -1270,7 +1355,7 @@ def predict(probi, problem):
                                 else:
                                     code_error_count = 1
                                 last_code_error = except_line
-                                if code_error_count >= 2:
+                                if code_error_count >= 2:  # Same error twice
                                     bad = True
                                     print("REPEATED ERROR")
                                     break
