@@ -37,6 +37,8 @@ Complex = "Complex"
 Nat = "Nat"
 Nat0 = "Nat0"
 
+Sym = Symbol
+
 def Seq(subtype = Real, limit = None, **unknown):
     "This function is a callable Type tag"
     if unknown:
@@ -58,6 +60,13 @@ def declarevar(name, Type):
     The variable types would be available in __annotations__ anyway,
     but we do some extra steps, declaring the variable."""
 
+    if name == 'I' and Type == Complex:
+        return
+    if Type == Expr:
+        return
+    if Type == Symbol:
+        Type = Real
+
     rewrites = {
         bool: Bool,
         int: Int,
@@ -71,7 +80,7 @@ def declarevar(name, Type):
         sym = ζSymbol(name)
         sym.kind = BooleanKind
     else:
-        assert isinstance(Type, str)
+        assert isinstance(Type, str), "Invalid type annotation: " + str(Type)
         assumptions = {
             # There is no sympy boolean assumption, nor a type for Boolean symbols?
             # Actually, Symbol inherits from sympy.logic.boolalg.Boolean
@@ -133,10 +142,12 @@ count = VarargsFunction('ζcount')
 
 set = sympy.Function('ζset')
 
-def ForAll(*args):
+#  Count, Set, Max, Min.
+
+def ForAll(vars, *args):
     raise NotImplementedError("ForAll")
 
-def Exists(*args):
+def Exists(vars, *args):
     raise NotImplementedError("Exists")
 
 # sympy.minimum/maximum(f, symbol, domain=Reals) returns the min/max of a function or expression,
@@ -160,7 +171,7 @@ def Exists(*args):
 # min = VarargsFunction('ζMinimum', kind=NumberKind)
 # max = VarargsFunction('ζMaximum')
 
-class ζmin(Function):
+class ζmin(sympy.Function):
     kind = NumberKind
     @classmethod
     def _should_evalf(cls, arg):
@@ -174,7 +185,7 @@ def min(*args):
 
 _minfuncs = (ζmin, sympy.Min)
 
-class ζmax(Function):
+class ζmax(sympy.Function):
     kind = NumberKind
     @classmethod
     def _should_evalf(cls, arg):
@@ -190,7 +201,7 @@ _maxfuncs = (ζmax, sympy.Max)
 
 # TODO: sympy.Abs returns a UndefinedKind, they prehaps forgot to implement it
 
-class divides(Function): #VarargsFunction):
+class divides(sympy.Function): #VarargsFunction):
     kind = BooleanKind
     #is_integer = True
     nargs = 1,2
@@ -216,7 +227,12 @@ class divides(Function): #VarargsFunction):
     #     else:
     #         return divides(m, n)
 
-sum = VarargsFunction('Sum')
+
+# sympy.Product is always unevaluated, sympy.product simplifies to an expression or produces a Product
+Product = sympy.product
+# But there's no similar sympy.sum!
+sum = sympy.Sum
+#sum = VarargsFunction('Sum')
 
 # sympy lcm/gcd are not symbolic
 lcm = VarargsFunction('LCM', minargs = 2)
@@ -224,11 +240,20 @@ gcd = VarargsFunction('GCD', minargs = 2)
 
 mod = sympy.Mod
 
+
+
 # Special for questions that ask for sum of numerator and denominator
-sum_num_denom = sympy.Function('sum_num_denom')  # Rational -> Int
+#sum_num_denom = sympy.Function('sum_num_denom')  # Rational -> Int
+def as_numer_denom(x):
+    if isinstance(x, (int, float)):
+        return rational(0.5).as_numer_denom()
+    if isinstance(x, Expr):
+        return x.as_numer_denom()
+    # Not sure what else would be sensible
+    raise NotImplementedError("as_numer_denom of " + str(x))
 
 
-class If(Function): #VarargsFunction):
+class If(sympy.Function): #VarargsFunction):
     nargs = 3
     @classmethod
     def eval(cls, C, T, E):
@@ -238,15 +263,19 @@ class If(Function): #VarargsFunction):
     def kind(self):
         return getkind(self.args[1])
 
+#Piecewise = sympy.Piecewise
+
 def Iff(a, b):
     assert_boolean_kind(a, '1st arg to Iff')
     assert_boolean_kind(a, '2nd arg to Iff')
-    print("IFF CALL")
     return Eq(a, b)
 
 
 # sympy.AppliedPredicates
 is_prime = Q.prime
 #Q.composite, Q.even, Q.odd, .positive, .rational, .square, .infinite, etc.
+
+def digits(n, b = 10):
+    raise NotImplementedError("digits")
 
 solve = wrap_sympy_solve

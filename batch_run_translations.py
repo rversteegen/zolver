@@ -12,14 +12,16 @@ import os
 sys.path.append("ζolve")
 from ζ import dsl, dsl_parse, ζ3, solver
 
-INPUTDIR = "translations/"
+INPUTDIR = "translations3/"
 
 extracts = ""
 
 selections = []
 
 stats_template = {
+    'fname': '',
             'prob_name' : '',
+            'difficulty': 0,
             'total': 1,  #len(df),
             'parsed': 0,
             'parsefailed': 0,
@@ -44,13 +46,15 @@ def process_file(fname):
 
     df = pd.read_csv(INPUTDIR + fname)
 
-    allstats = pd.DataFrame(stats_template, index = [fname])
+    allstats = pd.DataFrame(stats_template, index = [0])
 
     for idx in df.index:
         correct = False
         row = df.loc[idx]
-        stats = pd.DataFrame(stats_template, index = [fname])
+        stats = pd.DataFrame(stats_template, index = [0])
+        stats.fname = fname
         stats.prob_name = row.prob_name
+        stats.difficulty = int(row.difficulty)
 
         print("********************************************************************************")
         print(f"\n\n\n###### Problem {row.prob_name}:\n{row.problem}\n\n###### Translation:\n{row.translation}\n")
@@ -113,7 +117,7 @@ def process_file(fname):
         #     stats.excepts += 1
 
         if stats.parsefailed[0]:
-            selections += [(row.problem, row.translation, res_note)]
+            selections += [(fname, row.problem, row.translation, res_note)]
 
         allstats = pd.concat([allstats,stats])
         by_prob = pd.concat([by_prob,stats])
@@ -135,17 +139,17 @@ if False:
 else:
     stats = pd.DataFrame()
     for fname in os.listdir(INPUTDIR):
-        if fname.endswith('.csv'): # and 'InternLM2Math7b_v4' in fname:
+        if fname.endswith('.csv'):# and 'InternLM2Math7b_v4' in fname:
             stats = pd.concat([stats, process_file(fname)])
             # if len(stats)> 100:
             #     break
     print(stats)
 
     if len(selections):
-        random.shuffle(selections)
+        #random.shuffle(selections)
         with open("translation_selections.txt", "w") as ofile:
-            for prob, trans, note in selections:
-                ofile.write("## PROBLEM\n" + prob + "\n\n## TRANS\n" + trans + "\n\nRESULT: " + note + "\n\n\n")
+            for fname, prob, trans, note in selections:
+                ofile.write("## PROBLEM\n" + prob + " " + fname + "\n\n## TRANS\n" + trans + "\n\nRESULT: " + note + "\n\n\n")
         print("Wrote translation_selections.txt")
 
 #print(f"{fname}:\t solved {stats.correct}, wrong {stats.wrong}, {stats.solve_ran} parsed+ran, {stats.parsed} parsed and {stats.parsefailed} failed to parse of {stats.total} total; {stats.excepts} unexpected exceptions\n")
@@ -153,9 +157,14 @@ else:
 
 
 
+print("######################################## TALLY BY PROBLEM")
 probs = stats.groupby(['prob_name']).sum(numeric_only = True)
-print("PROB TALLYS")
 print(probs.to_string())
+
+
+print("######################################## TALLY BY FILE")
+files = stats.groupby(['fname']).sum(numeric_only = True)
+print(files.to_string())
 
 
 tally = stats.sum(numeric_only = True)

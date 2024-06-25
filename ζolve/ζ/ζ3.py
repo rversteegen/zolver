@@ -132,7 +132,7 @@ class SympyToZ3:
             return self.varmap[sym]
 
         #print(f"symbol {sym} assump:: {sym.assumptions0}")
-        assert sym.is_symbol   # Not is_Symbol; a Idx isn't
+        assert sym.is_symbol, "Expected a symbol (declared unknown), got " + str(sym)    # Not is_Symbol; a Idx isn't
         #assert sym.kind == sympy.core.NumberKind
         #dsl.assert_number_kind(sym, "Variable " + str(sym))
 
@@ -145,20 +145,21 @@ class SympyToZ3:
             z3var = Real(sym.name)
             # TODO, add rational constraint? Probably hardly matters
         elif not sym.is_real:
-            assert sym.is_complex
+            assert sym.is_complex, f"Variable {sym} has unknown domain"
             raise NotImplementedError("Complex variable")
         else:
-            assert sym.is_real
             # Assume real, but sympy doesn't assume a plain Symbol() is real
             z3var = Real(sym.name)
 
         self.varmap[sym] = z3var
         return z3var
 
+    # UNUSED
     def pow_to_z3(self, node: sympy.Pow) -> AstRef:
         expo = node.children[1]
         # Actually... x**y is alright.
-        assert expo.is_constant()
+        if not expo.is_constant():
+            raise NotImplementedError("Nonconstant exponents")
 
         #if isinstance
 
@@ -297,7 +298,7 @@ class Z3Solver():
 
         print(self.goal, " evaluated to ", soln)
         soln = num_to_py(soln)
-        assert soln not in self.solutions
+        assert soln not in self.solutions, "z3 returned same solution twice"
         self.solutions.append(soln)
         return sat
 

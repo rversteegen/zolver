@@ -264,12 +264,15 @@ def load_dsl(script, verbose = True):
 
         # Remove comments
         line = line.split('#')[0]
+        line = line.split('%%')[0]  # Just in case
         line = line.strip()
         if not line:
             continue
 
+        line = line.replace("∈", " in ")
+
         # Special case, allow multiple variables in a type annotation
-        m = re.match("(\w[ ,])+:(.*)$", line)
+        m = re.match("(\w[ ,])+:(.+)$", line)
         if m:
             vars = m.group(1).split(',')
             annot = m.group(2)
@@ -402,12 +405,15 @@ goal = count(S)
 """
 
     intext = """
-x1 : Int
-y1 : Int
-x2 : Int
-y2 : Int
-goal = abs(x2 - x1) + abs(y2 - y1)
-    """
+# Define the variables
+p : Int
+q : Int
+# Define the system of equations
+eq1 : 3*p + 4*q = 8
+eq2 : 4*p + 3*q = 13
+# Solve the system of equations
+goal = solve(eq1, p)[1].subs(q, solve(eq2, q)[1])
+"""
 
     workspace = load_dsl(intext)
     workspace.print()
