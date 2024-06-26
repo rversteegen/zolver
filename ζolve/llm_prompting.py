@@ -58,7 +58,7 @@ Categorise maths problems by topic:
 # Topics
 Graphs of functions: Yes
 Combinatorics: No
-Probability: No
+Statistics: No
 Number theory: No
 Complex numbers: Yes
 Vectors and matrices: No
@@ -72,7 +72,7 @@ Geometry: No
 # Topics
 Graphs of functions: No
 Combinatorics: No
-Probability: No
+Statistics: No
 Number theory: No
 Complex numbers: No
 Vectors and matrices: Yes
@@ -86,7 +86,7 @@ Geometry: Yes
 # Topics
 Graphs of functions: No
 Combinatorics: No
-Probability: No
+Statistics: No
 Number theory: No
 Complex numbers: No
 Vectors and matrices: No
@@ -100,7 +100,7 @@ Geometry: No
 # Topics
 Graphs of functions: No
 Combinatorics: Yes
-Probability: No
+Statistics: No
 Number theory: No
 Complex numbers: No
 Vectors and matrices: No
@@ -114,7 +114,7 @@ Geometry: No
 # Topics
 Graphs of functions: No
 Combinatorics: No
-Probability: No
+Statistics: No
 Number theory: Yes
 Complex numbers: No
 Vectors and matrices: No
@@ -130,7 +130,7 @@ Geometry: No
 
     topics = """graphs|Graphs of functions:
 comb|Combinatorics:
-prob|Probability:
+stats|Statistics:
 ntheory|Number theory:
 complex|Complex numbers:
 linalg|Vectors and matrices:
@@ -217,6 +217,8 @@ class ζolver:
                 return
 
             time_left = min(start_time + timeout - it_start, hard_timelimit - time.time())
+            if time_left < 5:
+                return
             # Give each repeat at least timeout/REPEATS time
             #time_for_item = min(time_left, timeout / max(1, REPEATS - repeat)
             time_for_item = max(10, min(time_left,  30))

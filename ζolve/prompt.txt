@@ -6,7 +6,7 @@ Please directly translate the following maths problem statement into code for th
 Unknown variables must be declared with type annotations before they are used. Choose appropriate variable names, single letters aren't necessary.
 
 Known quantities can be named as variables using "=" without a type annotation.
-[BLOCK] comb or prob
+[BLOCK] comb or stats
 For example to create an enumeration of 3 colors as constants 0, 1, 2:
 ```
 red, green, blue = range(3)
@@ -47,39 +47,39 @@ f = Lambda(x, sin(2*x))
 ```
 Unknown functions must be declared using "f : Function(...)", and constraints on them are given using ForAll:
 ```
-f : Function([Int], Real)  # From Int to Real
+f : Function((Int), Real)  # From Int to Real
 # f is an odd function
 ForAll(f(x) == -f(-x) for x in Int)  # x is a new bound variable
 ```
 
-Sequences, lists, and functions with integer domain (one arg of type Int) are the same thing and interchangeable.
+Sequences, lists, and functions with integer domain (one arg of type Int) are the same thing and interchangeable. Lists are finite sequences.
 
 [BLOCK] graphs
-• h is an real-valued function with two args of type T1, T2 → h : Function([T1, T1], Real)
+• h is an real-valued function with two args of type T1, T2 → h : Function((T1, T1), Real)
 • define the function circ(x, y) = x^2 + y^2 → x, y : Real ; circ = Lambda((x, y), x^2 + y^2)
 • the derivative of an expression or function e wrt x → e.diff(x)  %% x must be declared
 [BLOCK]
-• x is an unbounded sequence of reals → x : Seq(Real)   %% Equivalent to "x : Function([Int], Real)
+• x is an unbounded sequence of reals → x : Seq(Real)   %% Equivalent to "x : Function((Int), Real)
 • the length of a sequence q → len(q)  %% If q is infinite, len(q) = oo
 • an element x_i of x → x[i]   %% Equal to 0 if i >= len(x)
 • x is an unbounded unknown sequence of integers → x : Seq(Int)
 • x is a length n unknown sequence of integers, x_0, x_1, …, x_{n-1}  → x : Seq(Int, len = n)
 • the sequence of integers 4, …, 6 → range(4, 7)
-[BLOCK] seqs relations or combs
+[BLOCK] seqs relations or comb
 • {x_i} is a sequence of integers for i ∈ 1, …, 32 → x : Seq(Real, start = 1, len = 32)
 • the sequence of integers 0, …, 9 → seq(0, 9)
 • list/sequence of two values x, y → [x, y]
+• last element of list s → s[-1]
 • the reversal of a finite sequence/list s → reversed(s)
+[BLOCK] seqs comb or stats
+• a sorted list s → sorted(s)
+• median of list s → median(s)
+• average of list s → average(s)
 [BLOCK] seqs or ntheory
-• the sequence of digits of x in base b, starting with units at index 0 → digits(x, b)  %% E.g. digits(x, b) == x % b
+• the sequence of digits of x in base b, starting with the leading digit at index 0 → digits(x, b)  %% E.g. digits(x, b)[-1] == x % b
 [BLOCK]
 
-The argument to "set, seq, sum, product, or argmax" can be a list comprehension ranging over a sequence or finite or infinite set (such as Int, Real, Complex, etc). For example "sum(x^2 for x in c)".
-
-ForAll, Exists
-, including all reals bound/index variables: , Set, Sum
-But these functions don't: set, sum, product).
-
+set, seq, sum, product, and argmax can take a list comprehension arg ranging over a sequence or finite or infinite set (such as Int, Real, Complex, etc). For example "sum(x^2 for x in c)".
 
 A proposition is any expression with a boolean value, such as "a > 2 and" or "is_prime(x)".
 • p and q → p and q
@@ -93,8 +93,7 @@ Use ForAll and Exists to put constraints on sequences, for example the Fibonacci
 ```
 fib : Seq(Int)
 fib[1] == fib[2] == 1
-i : Int
-ForAll([i >= 3], fib[i] == fib[i - 1] + fib[i - 2])
+ForAll(fib[i] == fib[i - 1] + fib[i - 2] for i in Int if i > 2)
 ```
 
 • x ∈ S → x in S
@@ -114,16 +113,18 @@ ForAll([i >= 3], fib[i] == fib[i - 1] + fib[i - 2])
 • the largest possible value of e → max(e)
 • the number of possible values of e → count(e)
 • the value x ∈ S for which f(x) attains the maximum → argmax(f(x) for x in S)
+• sum of numerator p and denominator q of a rational x written as p/q where gcd(p,q)=1 → sum(as_numer_denom(x))
 
 [BLOCK] ntheory or comb
 Syntax lookup table:
 • p is a factor of q → q % p == 0
+• ascending list of the divisors of n, starting from 1 to n → divisors(n)  %% Doesn't include -1 if negative
+• ascending list without duplicates of the prime factors of n → primefactors(n)  %% Includes n if prime, excludes 1
 • greatest common divisor of x and y → gcd(x, y)
 • least common multiple of x and y → lcm(x, y)
 • x! → factorial(x)
 • x is a prime number → is_prime(x)
 • number of combinations x choose y → comb(x, y)
-• sum of numerator p and denominator q of a rational x written as p/q where gcd(p,q)=1 → sum(as_numer_denom(x))
 
 [BLOCK] geometry
 You can use standard sympy types and functions for geometry. The CAS extends these for solving for unknowns:
@@ -199,12 +200,11 @@ ENDCODE
 "A geometric sequence starts with $a_1 = 2$. If $a_4 = 6$ what is $a_9$?""
 
 STARTANSWER
-# In general, 'a' may contain real numbers
+# Declare all unknowns. In general, 'a' may contain real numbers
 a : Seq(Real)
 # A geometric sequence is defined by a[i] = r * a[i - 1]
 r : Real
-i : Int
-ForAll([i > 1], a[i] == r * a[i - 1])
+ForAll(a[i] == r * a[i - 1] for i in Int if i > 1)
 # Two elements of a are given
 a[1] == 2
 a[4] == 6
@@ -216,20 +216,39 @@ ENDCODE
 "Let $f(x) = 2x - c$ and $g(x, t) = $\frac{x + 1}{t - x}$ and $h(t) = g(h(t - 1), f(t))$. If $h(0) = 0$ what is $h(c)$?"
 
 STARTANSWER
-# c is an unknown parameter
+# Declare unknowns. c is an unknown parameter
 c : Real
-# The functions f and g have known equations (although parameter c is unknown), so we can use Lambda to define them
+# The functions f and g have non-recursive equations, so we can use Lambda to define them
 x : Real
 f = Lambda(x, 2*x - c)
 t : Real
 g = Lambda((x, t), (x + 1) / (t - x))
-# The function h is recurrent so its closed form isn't known. So we can't define it with Lambda but instead must declare an unknown function and use ForAll
-h : Function([Real], Real)
-ForAll([t], h(t) == g(h(t - 1), f(t)))
+# The function h is recurrent so we can't define it with Lambda but instead must declare as an unknown function
+h : Function((Real), Real)
+# Define h recursively with ForAll
+ForAll(h(t) == g(h(t - 1), f(t)) for t in Real)
 # h(0) is given
 h(0) == 0
 # Find h(c)
 goal = h(c)
+ENDCODE
+
+[BLOCK] comment
+### Statement
+"The sum of the geometric series $-1 + 3 - 9 + 27 - \\cdots + k is -44287. What is k?"
+
+STARTANSWER
+# This is a finite geometric series of unknown length n. Call the sequence of terms s_0, ..., s_{n-1}
+n : Int
+s : Seq(Int, len = n)
+# The first term is -1
+s[0] == -1
+# The common ratio of s is -3
+ForAll(s[i] == -3 * s[i - 1] for i in Int if i > 0)
+# The sum is -44287
+sum(s) = -44287
+# Find k, which is s[n]
+goal = s[n - 1]
 ENDCODE
 
 [BLOCK] seqs or relations
@@ -237,15 +256,16 @@ ENDCODE
 "The sum of the geometric series $-1 + 3 - 9 + 27 - \\cdots + k is -44287. What is k?"
 
 STARTANSWER
-# This is a finite geometric series of unknown length n. Call the sequence of terms s_1, ..., s_n
+# This is a finite geometric series of unknown length n
 n : Int
-s : Seq(Int, start = 1, len = n)
-# s_1 = -1
-s[1] == -1
-# The common ratio of s is -3
-ForAll([i > 1], s[i] == -1 * -3 ^ (i - 1))
-# Find s[n]
-goal = s[n]
+# Call the length n sequence of terms s_0, ..., s_{n-1}
+s : Seq(Int, len = n)
+# The first term is -1 and the common ratio is -3
+s == geometric_sequence(first = -1, r = -3, len = n)
+# The sum is -44287
+sum(s) == -44287
+# Find k, which is s[n-1]
+goal = s[n - 1]
 ENDCODE
 
 [BLOCK] complex
@@ -253,13 +273,14 @@ ENDCODE
 "A complex number $x+yi$ has magnitude 2 when added to $3+4i$. What's the minimum possible value of $x + y$?"
 
 STARTANSWER
-# We can either use two Real variables x and y or a single Complex variable z = x+yi. A single variable is easier for arithmetic
+# We can either use two Real variables x and y or a single Complex variable z == x+yi. A single variable is easier for arithmetic
 z : Complex
 abs(z + 3+4*I) == 2
 # We want to minimize x + y
 goal = min(Re(z) + Im(z))
 ENDCODE
 
+[BLOCK] comment
 STARTANSWER
 # Alternatively, we can use reals, and the magnitude of a complex number z is defined as sqrt(Re(z)^2 + Im(z)^2)
 x : Real
@@ -274,6 +295,7 @@ ENDCODE
 
 STARTANSWER
 # A fraction is undefined when the denominator is 0, so we need to solve y^2 - 5y + 4 = 0
+# y is unknown
 y : Complex
 y^2 - 5*y + 4 == 0
 # Sum all solutions
@@ -309,6 +331,23 @@ digits_b = digits(1200, 2)
 goal = len(digits_b) - len(digits_a)
 ENDCODE
 
+[BLOCK] ntheory
+[NOTE] number_theory-1286
+### Statement
+"Two numbers $90$ and $m$ share exactly three positive divisors. What is the greatest of these three common divisors?"
+
+STARTANSWER
+# m is a natural number. Be careful to disallow negative factors
+m : Int
+m > 0
+# The common divisors are the intersection of the divisors of 90 and of m
+common = divisors(90, positive = True).intersect(divisors(m, positive = True))
+# There are 3 common divisors
+count(common) == 3
+# Find the greatest
+goal = max(common)
+ENDCODE
+
 [BLOCK] ntheory seqs or graphs
 ### Statement
 "Find the smallest four-digit palindrome which is the square of another palindrome."
@@ -342,18 +381,18 @@ sum(A, B, C, D) == 360
 goal = round(A)
 ENDCODE
 
-[BLOCK] comb seqs or prob
+[BLOCK] comb seqs or stats
 ### Statement
 "The Smith family has 4 sons and 3 daughters. In how many ways can they be seated in a row of 7 chairs such that at least 2 boys are next to each other?"
 
 STARTANSWER
 # The order of the sons and daughters doesn't matter, only whether each seat has a son or a daughter. Represent the seats as a list of 7 numbers
 seats : Seq(Int, len = 7)
-# Define seat labels 'son', 'daughter'
+# Define an enumeration of seat labels 'son', 'daughter'
 son = 0
 daughter = 1
 # Each seat has a son or daughter
-ForAll([s in seats], s == son or s == daughter)
+ForAll(s == son or s == daughter for s in seats)
 # There is an pair of adjacent seats i, i + 1 with sons
 i : Int
 seats[i] == son
