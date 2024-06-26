@@ -243,7 +243,7 @@ class Z3Solver():
     def __init__(self, goal):
         self.trans = SympyToZ3()
         print("goal is", repr(goal))
-        if isinstance(goal, dsl._maxfuncs):  # in fact type(dsl.max(...)) == dsl.max !
+        if isinstance(goal, dsl.max_types):  # in fact type(dsl.max(...)) == dsl.max !
             if len(goal.args) > 1:
                 args = [self.trans.to_z3(arg) for arg in goal.args]
                 self.goal = max_of_values(args)
@@ -251,7 +251,7 @@ class Z3Solver():
                 self.goal = self.trans.to_z3(goal.args[0])
             self.sol = Optimize()
             self.objective = self.sol.maximize(self.goal)
-        elif isinstance(goal, dsl._minfuncs):
+        elif isinstance(goal, dsl.min_types):
             if len(goal.args) > 1:
                 args = [self.trans.to_z3(arg) for arg in goal.args]
                 self.goal = min_of_values(args)
