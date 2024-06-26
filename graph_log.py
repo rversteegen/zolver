@@ -28,9 +28,11 @@ logfile = "logs/deepseek-new-baselinev18.log" #slowdown from 1000s, then 60% fro
 
 # NEWNB
 
-#logfile = "logs/deepseek-new-baselinev53.log"   # 1xT4 No slowdown, but still 200% CPU usage
+#logfile = "logs/deepseek-new-baselinev67.log"   # 2xT4
 
-logfile = "logs/deepseek-new-baselinev55.log"  # 1xT4  No MHz, initial ramping up slowdown, later high ctx_switches
+logfile = "logs/deepseek-new-baselinev53.log"   # 1xT4 No slowdown, but still 200% CPU usage
+
+#logfile = "logs/deepseek-new-baselinev55.log"  # 1xT4  No MHz, initial ramping up slowdown, later high ctx_switches
 # Also, slowdown despite proc CPU at nearly 100%
 
 #logfile = "logs/deepseek-new-baselinev57.log"  # 2xT4 (balanced) pegged afer 3000s, but variable genrate, 50%GPU

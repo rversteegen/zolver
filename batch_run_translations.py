@@ -117,7 +117,7 @@ def process_file(fname):
         #     stats.excepts += 1
 
         if stats.parsefailed[0]:
-            selections += [(fname, row.problem, row.translation, res_note)]
+            selections += [(fname, row.prob_name, row.problem, row.translation, res_note)]
 
         allstats = pd.concat([allstats,stats])
         by_prob = pd.concat([by_prob,stats])
@@ -148,8 +148,8 @@ else:
     if len(selections):
         #random.shuffle(selections)
         with open("translation_selections.txt", "w") as ofile:
-            for fname, prob, trans, note in selections:
-                ofile.write("## PROBLEM\n" + prob + " " + fname + "\n\n## TRANS\n" + trans + "\n\nRESULT: " + note + "\n\n\n")
+            for fname, prob_name, prob, trans, note in selections:
+                ofile.write(fname + " " + prob_name + "\n## PROBLEM\n" + prob + " " + "\n\n## TRANS\n" + trans + "\n\nRESULT: " + note + "\n\n\n")
         print("Wrote translation_selections.txt")
 
 #print(f"{fname}:\t solved {stats.correct}, wrong {stats.wrong}, {stats.solve_ran} parsed+ran, {stats.parsed} parsed and {stats.parsefailed} failed to parse of {stats.total} total; {stats.excepts} unexpected exceptions\n")

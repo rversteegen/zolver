@@ -13,16 +13,21 @@ import pandas as pd
 
 dset = "AMC_12_valid_old"
 
-if True:
+
+
+if False:
     # heaps of OOM
-    # sol = pd.read_csv("logs/20240615-0737-43ofAIME24_Qoff_2048-2048tok_1xT4.csv", index_col = 0)
-    # sol['tag'] = 'noalloc'
+    sol4 = pd.read_csv("logs/20240615-0737-43ofAIME24_Qoff_2048-2048tok_1xT4.csv", index_col = 0)
+    sol4['tag'] = 'noalloc'
     # without OOM
     sol = pd.read_csv("logs/20240615-1052-30ofAIME24_Qoff_2048-2048tok_2xT4.csv", index_col = 0)
     sol['tag'] = 'T4'
     sol2 = pd.read_csv("logs/20240616-0404-30-43ofAIME24_Qoff_2048-2048tok_P100.csv", index_col = 0)
     sol2['tag'] = 'P100'
-    sol = pd.concat([sol,sol2])
+    sol3 = pd.read_csv("logs/20240622-0000-30-43ofAIME24_Qoff_2048-2048tok_2xT4.csv", index_col = 0)
+    sol3['tag'] = 'T4_0622'
+    sol = pd.concat([sol,sol2,sol3,sol4])
+    #sol = pd.concat([sol2,sol3])
     dset = "AIME_test24"
 
 elif True:
@@ -80,14 +85,21 @@ print(sol.sort_values('time'))
 prompts = pd.DataFrame(com.value_counts(['tag','prompt']))
 
 print("############################## PROBS SORT BY CORRECT")
-print(com.loc[com.prompt == 'compute0'].sort_values('correct'))
+print(com.loc[com.prompt == 'elab0tool'].sort_values('correct'))
 print()
-print(com.loc[com.prompt == 'analy2'].sort_values('correct'))
+print(com.loc[com.prompt == 'tool1'].sort_values('correct'))
 print()
+
+print("############################## PROBS SORT BY CODE BLOCKS")
+print(com.loc[com.prompt == 'elab0tool'].sort_values('code_blocks').to_string())
+print()
+print(com.loc[com.prompt == 'tool1'].sort_values('code_blocks').to_string())
+print()
+
 print("############################## STATS")
 
 print("By result_info:")
-print(com.value_counts('result_info'))
+print(com.value_counts(['tag','prompt','result_info']))
 print("No output:", sum(sol.answer == -1))
 print("Total time:", sum(sol.time) / 60, "min")
 
