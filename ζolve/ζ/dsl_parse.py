@@ -54,6 +54,33 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
     #                 args=[node], keywords=[]))
     #     return node
 
+    def visit_comprehension(self, node, ty):
+        args = [node.elt]
+        varnames = []  # strings
+        vars = []  # nodes
+        vartypes = []  # nodes
+        ifs = []
+        for gen in node.generators:
+            varnames.append(gen.target.id)
+            vars.append(ast.Constant(gen.target.id))
+            # the thing being iterated. Already a node
+            vartypes.append(gen.iter)
+            ifs += gen.ifs
+
+        args.append(ast.Dict(vars, vartypes))
+        args += ifs
+        ret = makeCall('SetConstructor', args, copyloc=node)
+        print("MAKE SET:\n", ast.dump(ret, indent=4))
+        return  self.generic_visit(ret)
+
+    def visit_ListComp(self, node):
+        return self.visit_comprehension(node, 'seq')
+
+    def visit_SetComp(self, node):
+        return self.visit_comprehension(node, 'set')
+
+    def visit_GeneratorExp(self, node):
+        return self.visit_comprehension(node, 'set')
 
     def visit_Name(self, node):
         "Modified version of Transform.visit_Name to remove auto-Symbol'ing"
@@ -272,11 +299,12 @@ def load_dsl(script, verbose = True):
         line = line.replace("∈", " in ")
 
         # Special case, allow multiple variables in a type annotation
-        m = re.match("(\w[ ,])+:(.+)$", line)
+        # Breaks on bad syntax like Lambda(x:Int, ...)
+        m = re.match("([^:]+):(.+)$", line)
         if m:
             vars = m.group(1).split(',')
             annot = m.group(2)
-            line = '\n'.join(v + " : " + annot for v in vars)
+            line = '\n'.join(v.strip() + " : " + annot for v in vars)
 
         if 'variable(' in line: # or 'seq(' in line:
             # Obsolete
@@ -338,7 +366,7 @@ def load_dsl(script, verbose = True):
         # If it's a boolean, make it a constraint
 
         if hasattr(res, 'kind') and res.kind == dsl.BooleanKind:
-            print("Convert boolean to constraint!")
+            #print("Convert boolean to constraint!")
             dsl.constraint(res)
 
         #output.append(res)
@@ -413,6 +441,27 @@ eq1 : 3*p + 4*q = 8
 eq2 : 4*p + 3*q = 13
 # Solve the system of equations
 goal = solve(eq1, p)[1].subs(q, solve(eq2, q)[1])
+"""
+
+    # | and & operators are unsupported!
+    intext="""
+n,w,a : Int
+w & a == 27
+w and a == 27
+w | a == n
+w or a == n
+goal = min(n)
+"""
+
+    intext="""
+# a and b are positive integers
+a, b : Int
+a > 0
+b > 0
+# The sum of a and b is 30
+a + b == 30
+# The number of possible assignments to a and b
+goal = count([a, b])
 """
 
     workspace = load_dsl(intext)

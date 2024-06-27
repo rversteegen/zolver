@@ -62,10 +62,12 @@ Element = sympy.Function('ζelement')
 # and then return a sympy.Expr/Basic
 
 #count = VarargsFunction('ζcount')
-count = ζcount
-
+#count = ζcount
 
 set = sympy.Function('ζset')
+
+def SetConstructor(*args):
+    return ζSetConstructor(_ctx, *args)
 
 #  Count, Set, Max, Min.
 
@@ -90,3 +92,29 @@ is_prime = Q.prime
 #Q.composite, Q.even, Q.odd, .positive, .rational, .square, .infinite, etc.
 
 solve = wrap_sympy_solve
+
+# geometry
+
+def distance(a, b):
+    return a.distance(b)
+
+def reflect(a, b):
+    return a.reflect(b)
+
+def intersect(a, b):
+    return a.intersect(b)
+
+def intersection(a, b):
+    return a.intersection(b)
+
+def angle(a, b):  # LinearEntities
+    #return a.angle_between(b)
+    return a.smallest_angle_between(b)
+
+def rad2deg(x):
+    return x * 360 / (2 * pi)
+
+# aka sympy.rad
+def deg2rad(x):
+    return x * 2 * pi / 360
+

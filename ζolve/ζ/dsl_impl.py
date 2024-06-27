@@ -1,5 +1,13 @@
+"""
+DSL function implementations, aside from constructors and trivial wrappers
+"""
+
 from sympy import *
 from ζ.dsl_helpers import *
+import ζ.dsl
+
+
+
 
 
 ################################################################################
@@ -22,12 +30,15 @@ Nat0 = "Nat0"
 
 Sym = sympy.Symbol
 
-def Seq(subtype = Real, limit = None, **unknown):
+
+def Seq(subtype = Real, length = None, limit = None, **unknown):
     "This function is a callable Type tag"
+    if limit is not None:   # obsolete name
+        length = limit
     if unknown:
         print(f"WARN: unknown args: Seq({unknown})")
     def makeSym(name):
-        ret = sympy.SeqSymbol(name)
+        ret = SeqSymbol(name)
         # TODO: allow recursive subtypes Seq(Seq(...))
         ret.el_type = subtype
         ret.seq_limit = limit
@@ -38,8 +49,28 @@ def Seq(subtype = Real, limit = None, **unknown):
 ################################################################################
 
 
-def ForAll(vars, *args):
-    raise NotImplementedError("ForAll")
+class BoolReturningFunction(sympy.core.function.Application, sympy.logic.boolalg.Boolean):
+    """Based on sympy.BooleanFunction, the base class for :py:class:`~.And`, :py:class:`~.Or`,
+    :py:class:`~.Not`, etc.
+    """
+    is_Boolean = True
+
+
+    def __lt__(self, other):
+        raise TypeError(filldedent('''
+            A Boolean argument can only be used in
+            Eq and Ne; all other relationals expect
+            real expressions.
+        '''))
+    __le__ = __lt__
+    __ge__ = __lt__
+    __gt__ = __lt__
+
+
+
+class ForAll(BoolReturningFunction):
+    def __init__(cls, *args):
+        raise NotImplementedError("ForAll")
 
 def Exists(vars, *args):
     raise NotImplementedError("Exists")
@@ -96,9 +127,36 @@ def wrap_max(*args):
 max_types = (ζmax, sympy.Max)
 
 
-class ζcount(sympy.Expr):
-    pass
+def seq(start, end, *args, **kwargs):
+    return ζrange(start, end + 1, *args, **kwargs)
 
+
+class ζcount(sympy.Basic):
+    "count()"
+    is_number = True
+    kind = NumberKind
+
+    def __new__(cls, *args):
+        # TODO: if passed a list/tuple rather than a comprehension, count all
+        # tuples of assignments to those expressions
+        # TODO: iterables
+        if len(args) == 1:
+            arg = args[0]
+            #print(f"got {arg}: {str(type(arg))}")
+            if type(arg).__name__ == 'generator':
+                arg = list(arg)
+            if isinstance(arg, (list, tuple, set)):
+                # If all args are numbers, can eval
+                if all(is_a_constant(item) for item in arg):
+                    print(f"!Eval count({args}) to {len(arg)}!!")
+                    return Integer(len(arg))
+            raise DSLError("count() argument not understood: " + str(arg))
+        return Basic.__new__(cls, *args)
+
+    def is_constant(self):
+        return False
+
+count = ζcount
 
 # TODO: sympy.Abs returns a UndefinedKind, they prehaps forgot to implement it
 
@@ -240,6 +298,10 @@ def ctx_declarevar(_ctx, name, Type):
     elif Type == Bool:
         sym = ζSymbol(name)
         sym.kind = BooleanKind
+    elif isinstance(Type, Set):
+        sym = ζSetSymbol(name)
+    elif isinstance(Type, Seq):
+        sym = ζSetSymbol(name)
     else:
         assert isinstance(Type, str), "Invalid type annotation: " + str(Type)
         assumptions = {
@@ -258,3 +320,5 @@ def ctx_declarevar(_ctx, name, Type):
     _ctx.variables[name] = sym
     _ctx.locals[name] = sym
     return sym
+
+

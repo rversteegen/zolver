@@ -1,11 +1,13 @@
 """
-Helper functions used in dsl.py but which don't want to live in that pollution.
+DSL types and helper functions used in dsl.py but which don't want to live in that pollution.
 """
+from sympy.series.sequences import SeqExpr
 import sympy
 from sympy.core import BooleanKind, NumberKind, UndefinedKind
 from sympy.sets.sets import SetKind
 
 NotSymbolicKind = "NotSymbolicKind"
+SeqKind = "SeqKind"
 
 
 
@@ -13,9 +15,6 @@ class DSLError(Exception):
     def __init__(self, msg, lineno = None):
         self.lineno = lineno
         super().__init__(msg)
-
-
-
 
 ################################################################################
 
@@ -29,40 +28,79 @@ class DSLError(Exception):
 
 
 
-# class Subscript(Expr):
-#     pass
+    # class Subscript(Expr):
+    #     pass
 
-# class SeqSymbol(SeqBase):
+    # class SeqSymbol(SeqBase):
 
-#     def __getitem__(self, index):
-#         return Subscript(self, index)
-
-
-
-# SeqBase.__getitem__ sucks, it only supports ints and slices of ints, not expressions,
-# plus it runs the index through SeqBase._ith_point(), [0] is the first element
-# rather than the 0th element, so giving a sequence a range of (1, oo) will
-# be very confusing. SeqBase.coeff(i) is the actual element at i.
+    #     def __getitem__(self, index):
+    #         return Subscript(self, index)
 
 
 
-#Note IndexedBase('I')[0].free_symbols == {I, I[0]}   (Symbol and Indexed)
+    # SeqBase.__getitem__ sucks, it only supports ints and slices of ints, not expressions,
+    # plus it runs the index through SeqBase._ith_point(), [0] is the first element
+    # rather than the 0th element, so giving a sequence a range of (1, oo) will
+    # be very confusing. SeqBase.coeff(i) is the actual element at i.
 
 
-# IndexedBase inherits from NotIterable because attempting to iterate it creates
-# an infinite loop because of its overloaded __getitem__ operator...
-# As a result is_sequence() returns False (unless you pass it includes=[IndexedBase]).
-# We could define __iter__ to allow for loops without the infinite loop.
+
+    #Note IndexedBase('I')[0].free_symbols == {I, I[0]}   (Symbol and Indexed)
 
 
-#class SeqSymbol(SeqBase):
+    # IndexedBase inherits from NotIterable because attempting to iterate it creates
+    # an infinite loop because of its overloaded __getitem__ operator...
+    # As a result is_sequence() returns False (unless you pass it includes=[IndexedBase]).
+    # We could define __iter__ to allow for loops without the infinite loop.
 
-SeqSymbol = sympy.IndexedBase
+
+    #class SeqSymbol(SeqBase):
+
+class ζSeqExpr(SeqExpr):
+    "An expression (aside from a seq symbol) for an unknown finite or infinite sequence"
+    kind = SeqKind
+    length = None  # Replaces length property
+
+    def __new__(cls, eltype = "Real", length = None):
+        ret = Basic.__new__(cls)
+        ret.eltype = eltype
+        ret.length = length
+        return ret
+
+
+class ζSeqSymbol(sympy.Symbol):
+
+    kind = SeqKind
+    var_type = None  # A Seq() object
+
+
+SeqSymbol = ζSeqExpr
+#SeqSymbol = sympy.IndexedBase
+
 
 class ζSymbol(sympy.Symbol):
     "Allow adding custom attributes, since Symbol has __slots__."
     var_type = None  # A Type tag
     kind = NumberKind  # By default, overridden
+
+class ζSetSymbol(sympy.Symbol):
+    var_type = None  # A Set() object
+    kind = SetKind
+
+
+
+
+class ζSetConstructor(sympy.Basic):
+    "An unknown finite or infinite sequence"
+
+    def __new__(cls, ctx, expr, vars, constraints):
+        print("SETCONSTR", expr, vars, constraints)
+        syms = []
+        for vname, vtype  in vars.items():
+            syms.append(ctx_declarevar(ctx, vname, vtype))
+        print("syms", syms)
+        return super().__new__(cls, expr, syms, constraints)
+
 
 # NOT USED
 class ζBoolSymbol(sympy.Symbol):
@@ -83,6 +121,14 @@ def to_NumberKind(expr):
     if expr.kind != NumberKind:
         expr.kind = NumberKind
     return expr
+
+def is_a_constant(x):
+    # Note Expr.is_constant() returns True for expressions like summations with no free symbols
+    if isinstance(x, (int, float)):
+        return True
+    if isinstance(x, sympy.Basic):
+        return x.is_number
+    return False
 
 ################################################################################
 
@@ -161,4 +207,5 @@ def ast_to_sympy(astnode):
     "Replace our sympy overrides with the sympy versions"
 
     # Don't use sympy's gcd/lcm, they treat args containing symbols as polynomials, so gcd(x, 42) == 1
+
 

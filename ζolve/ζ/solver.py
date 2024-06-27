@@ -2,7 +2,7 @@ import sympy
 
 #from . import vector as vec
 #from ζ.vector import inf
-import ζ.dsl
+from ζ import dsl
 import ζ.ζ3
 from ζ.ζ3 import solved, unsat, unknown, notunique
 
@@ -27,14 +27,14 @@ class Workspace:
     def finish_parse(self):
         "Called by dsl_parse.load_dsl()"
         if self.goal is None:
-            raise ζ.dsl.DSLError('Missing "goal = ..."')
+            raise dsl.DSLError('Missing "goal = ..."')
         if isinstance(self.goal, (list, tuple)):
             if len(self.goal) == 1:
                 self.goal = self.goal[0]
             else:
-                raise ζ.dsl.DSLError(f"goal should be a single expression, but got list of {len(self.goal)}")
+                raise dsl.DSLError(f"goal should be a single expression, but got list of {len(self.goal)}")
         print("GOAL=",self.goal)
-        ζ.dsl.assert_number_kind(self.goal, "The goal")
+        dsl.assert_number_kind(self.goal, "The goal")
 
 
     def solve_for_AIMO(self):
@@ -74,7 +74,7 @@ class Workspace:
         if ret is not unknown:
             print("resolved by ζ3:" + sol.solved_by)
         if ret is solved:
-            self.solution = sol.solutions[0]
+            self.solution = sol.solutions.pop()
         if AIMO:
             if not sol.solution_attained():
                 # min/max result is infinity or an inf/sup of an open interval
@@ -83,3 +83,11 @@ class Workspace:
 
     def sympy_solve(self):
         pass
+
+    def my_solve(self):
+        print("--------------------------------------------------my_solve")
+        print(self.goal)
+
+        if isinstance(self.goal, dsl.ζcount):
+            # Find 
+            pass

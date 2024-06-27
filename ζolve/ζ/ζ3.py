@@ -31,10 +31,15 @@ class ItDispleasesζ3(ValueError):
     lineno = None
     pass
 
-
-set_param('timeout', 5000)  # ms
+global_timeout_ms = 5000
+set_param('timeout', global_timeout_ms)  # ms
 set_param('memory_max_size', 700)  # MB  "hard upper limit for memory allocations"
 set_param('memory_high_watermark_mb', 700)  # MB  "high watermark for memory consumption"
+
+def set_timeout(timeout_ms):
+    set_param('timeout', timeout_ms)
+    global global_timeout_ms
+    global_timeout_ms = timeout_ms
 
 
 
@@ -90,6 +95,9 @@ class SympyToZ3:
             sympy.Lt:          lambda node, lhs, rhs:  lhs <  rhs,
             sympy.Ge:          lambda node, lhs, rhs:  lhs >= rhs,
             sympy.Gt:          lambda node, lhs, rhs:  lhs >  rhs,
+            sympy.And:         lambda node, lhs, rhs:  lhs &  rhs,
+            sympy.Or:          lambda node, lhs, rhs:  lhs |  rhs,
+
             sympy.Pow:         lambda node, lhs, rhs:  lhs ** rhs,  # 1/z is sympy.Pow(z, -1), x/y is Mul
             #sympy.Pow:     self.pow_to_z3,
             sympy.Abs:         lambda node, arg:  If(arg < 0, -arg, arg),
@@ -108,7 +116,6 @@ class SympyToZ3:
         }
 
         self.predicate_translations = {
-            'prime':   lambda arg: Not(Exists([p, q], And(p > 1, q > 1, p * q == arg)))
         }
 
     def _prime_pred(self, _node, arg):
@@ -158,7 +165,7 @@ class SympyToZ3:
     def pow_to_z3(self, node: sympy.Pow) -> AstRef:
         expo = node.children[1]
         # Actually... x**y is alright.
-        if not expo.is_constant():
+        if not expo.is_constant():   #is_a_constant
             raise NotImplementedError("Nonconstant exponents")
 
         #if isinstance
@@ -201,10 +208,15 @@ class SympyToZ3:
         #         # Something like Sympy.Add that takes variable args
         #         return functools.reduce(trans, [node] + args)
 
-        return trans(node, *args)
+        try:
+            return trans(node, *args)
+        except TypeError as e:
+            # Something like mixing bools and ints
+            raise dsl.DSLError(str(e))
 
 
 class CountSATPropagator(UserPropagateBase):
+    "Can only be used for counting number of boolean assignments that are sat"
     def __init__(self, sol):
         UserPropagateBase.__init__(self, sol)
         self.trail = []
@@ -235,15 +247,22 @@ class CountSATPropagator(UserPropagateBase):
 class Z3Solver():
 
     goal: ExprRef
+    goal_func: str    # ''/min/max/count
     objective = None  # If not None, then using z3.Optimize()
     solved_by = ''    # Name of the strategy that worked
-    solution = None
+    solutions = None
+    solution_bounds = (-oo, oo)  # TODO: not implemented for min/max
     solution_attained = False  # For Optimizer(), whether can reach the limit, not just inf/sup
 
+    skipped_print_times = 0
+
     def __init__(self, goal):
+        self.solutions = set()
+
         self.trans = SympyToZ3()
         print("goal is", repr(goal))
         if isinstance(goal, dsl.max_types):  # in fact type(dsl.max(...)) == dsl.max !
+            self.goal_func = 'max'
             if len(goal.args) > 1:
                 args = [self.trans.to_z3(arg) for arg in goal.args]
                 self.goal = max_of_values(args)
@@ -252,6 +271,7 @@ class Z3Solver():
             self.sol = Optimize()
             self.objective = self.sol.maximize(self.goal)
         elif isinstance(goal, dsl.min_types):
+            self.goal_func = 'min'
             if len(goal.args) > 1:
                 args = [self.trans.to_z3(arg) for arg in goal.args]
                 self.goal = min_of_values(args)
@@ -260,6 +280,15 @@ class Z3Solver():
             self.sol = Optimize()
             self.objective = self.sol.minimize(self.goal)
         else:
+            self.goal_func = ''
+
+            if isinstance(goal, dsl.ζcount):
+                # Strip the count()
+                assert len(goal.args) == 1
+                assert isinstance(goal.args[0], sympy.Basic)
+                goal = goal.args[0]
+                self.goal_func = 'count'
+
             self.sol = Solver()
             self.sol.set('randomize', False)  # for nlsat
             self.sol.set('max_memory', 500)
@@ -277,37 +306,75 @@ class Z3Solver():
     def add_constraint(self, spexp: sympy.Expr):
         self.sol.add(self.trans.to_z3(spexp))
 
-    def find_one_solution(self):
-        "Returns sat, unsat or unknown and appends to self.solutions"
-        print("z3 solver =", self.sol)
-        if len(self.solutions) == 0:
+    def find_one_solution(self, blockit = False, v = True):
+        """Returns sat, unsat or unknown and appends to self.solutions.
+        If blockit, blocks the solution.
+        """
+        if v:
+            print("z3 solver =", self.sol)
+        if not self.solutions:
             # On the first run, try everything
             result = self.solve_strategies()
         else:
             # Thereafter just keep calling .check()
             self.try_sat(self.sol, 'nextsol')
             result = self._result
-        if result == unsat:
-            return unsat
-        if result == unknown:
-            return unknown
+        if result != sat:
+            return result
 
         m = self.sol.model()
-        print("z3 model() =", m)
-        soln = m.eval(self.goal, model_completion = True)
 
-        print(self.goal, " evaluated to ", soln)
+        soln = m.eval(self.goal, model_completion = True)
+        if blockit:
+            self.sol.add(self.goal != soln)
+        if v:
+            print("z3 model() =", m)
+            print(self.goal, " evaluated to ", soln)
         soln = num_to_py(soln)
         assert soln not in self.solutions, "z3 returned same solution twice"
-        self.solutions.append(soln)
+        self.solutions.add(soln)
         return sat
 
-    def find_next_solution(self):
-        "Blocks the previous solution and calls find_one_solution"
-        m = self.sol.model()
-        # Block existing assignment
-        self.sol.add(self.goal != m.eval(self.goal, model_completion = True))
-        return self.find_one_solution()
+    def count_solutions(self):
+        "For goal_func = 'count'"
+
+        start_time = time.time()
+        timeout = start_time + global_timeout_ms / 1000
+
+        ret = self.find_one_solution(blockit = True, v = False)
+        while True:
+            if ret == sat:
+                ret = self.find_one_solution(blockit = True, v = False)
+                if time.time() > timeout:
+                    print("count_solutions timed out!")
+                    ret = unknown
+                else:
+                    continue
+
+            if ret == unknown:
+                self.bounds = (len(self.solutions), oo)
+                self.solutions = set()
+                return unknown
+
+            elif ret == unsat:
+                print(f"Found {len(self.solutions)} solutions: { list(self.solutions)[:40] }")
+                self.solutions = {len(self.solutions)}
+                return solved
+            else:
+                assert False, "Bad ret"
+
+
+
+        # goal isn't min/max, so check for unique solution
+        ret = self.find_next_solution()
+        if ret == sat:
+            return notunique
+        if ret == unknown:
+            # It's probably fine. TODO: should ideally warn the caller about it.
+            print("Warning: found one solution but couldn't prove it unique")
+
+
+        
 
     def find_objective(self):
         "solve() for min/max."
@@ -354,27 +421,32 @@ class Z3Solver():
         # m = self.sol.model()
         # print("z3 model() =", m)
         print(self.goal, " evaluated to ", soln)
-        self.solutions.append(soln)
+        self.solutions.add(soln)
         return solved
 
     def solve(self):#, spexp: sympy.Expr):
         """Returns one of
-        -solved:    self.solutions is list of one int or float
+        -solved:    self.solutions is an iterable of one int or float
         -unsat:     self.solutions = []
-        -notunique: self.solutions a list of two or more solutions
+        -notunique: self.solutions an iterable of two or more solutions
         -unknown:   if unsolved
         """
         #print("z3 solver =", self.sol)
-        self.solutions = []
+
+        # goal is min() or max()
         if self.objective is not None:
             return clean_sat(self.find_objective())
 
-        ret = self.find_one_solution()
+        # goal is count()
+        if self.goal_func == 'count':
+            return clean_sat(self.count_solutions())
+
+        # goal isn't min/max, so check for unique solution. Find a solution, block it, and look again.
+        ret = self.find_one_solution(blockit = True)
         if ret in (unsat, unknown):
             return clean_sat(ret)
 
-        # goal isn't min/max, so check for unique solution
-        ret = self.find_next_solution()
+        ret = self.find_one_solution()
         if ret == sat:
             return notunique
         if ret == unknown:
@@ -401,10 +473,20 @@ class Z3Solver():
         "Run solver.check(), put result in self._result, return _result != unknown."
         if timeout_ms:
             solver.set('timeout', timeout_ms)  # Override global default
-        ctime = time.time()
+        stime = time.time()
         self._result = solver.check()
-        ctime = time.time() - ctime
-        print(f"{tag} check() = {self._result} in {1e3 * ctime :.1f}ms")
+
+        thetime = time.time()
+        ctime = thetime - stime
+        self.skipped_print_times += 1
+        firstprint = not(hasattr(self, 'lastprint_time'))
+        if firstprint or thetime > self.lastprint_time + 1.0:
+            if not firstprint:
+                ctime = thetime - self.lastprint_time
+            print(f"{tag} {self.skipped_print_times}x check() = {self._result} in {1e3 * ctime :.1f}ms")
+            self.lastprint_time = thetime
+            self.skipped_print_times = 0
+
         if self._result == unknown:
             print("reason_unknown =", solver.reason_unknown())
             return False
