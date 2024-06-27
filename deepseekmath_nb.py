@@ -25,8 +25,6 @@
 # The core implementation of prompting and executing python is apparently ultimately from
 # https://www.kaggle.com/code/olyatsimboy/aimo-zero-shot-sc-mmos-deepseekmath/notebook
 
-
-
 # %%
 ### %%time
 import os
@@ -64,39 +62,48 @@ if QUANT:  #Fits on one device
 
 
 USE_PAST_KEY = True
-SEED = 320
-MODEL_PATH = "/kaggle/input/deepseek-math"
+SEED = 322
+#https://www.kaggle.com/code/voxelate/deepseek-math-7b-rl
+MODEL_PATH = "/kaggle/input/deepseek-math-7b-rl/deepseek-math"
 MISTRAL = False
 LLEMMA = False   # LLEMMA tokenizer
 RELOAD_MODEL = False   # For interactive run-all
 DEVICE = 'cuda' #if torch.cuda.is_available() else 'cpu'
-N_REPETITIONS = 3 if VALIDATE else (30 if SLOW else 1)   # 6
-MAX_SINGLE_GEN_TOKENS = 1400
-MAX_GEN_TOKENS = 1600 if SLOW else 500
+N_REPETITIONS = 3 if VALIDATE else (15 if SLOW else 1)   # 6
+MAX_SINGLE_GEN_TOKENS = 1000
+MAX_GEN_TOKENS = 1300 if SLOW else 500
 #MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
 MAX_TOKENS = 2048
 
+RELOAD_MODEL2 = True
 MODEL_PATH2 = '/kaggle/input/download-embeddedllm-mistral-7b-merge-14-v0-4/EmbeddedLLM-Mistral-7B-Merge-14-v0.4/'
+#MODEL_PATH2 = '/kaggle/input/aimo-24-model-meta-math-metamath-mistral-7b'
 QUANT2 = False
 
 FIRSTPROB = 20  # ignored for PRIVATE
 
 if PRIVATE:
     NPROBS = 50
-    TIME_LIMIT = 31000
+    TIME_LIMIT = 12720   # 3:32
 elif VALIDATE:
     NPROBS = 13 #100
     TIME_LIMIT = 8000
 else:
     NPROBS = 1  #10
     TIME_LIMIT = 450
-    
+
+
+# %% [markdown]
+# # Install and import libraries, aimo/dummy module
 
 # %%
+%%time
+!pip uninstall -y fastai -qq  # Conflicts with torch>=2.3.0
+!pip uninstall  -y torch -qq
+!pip install  -U --no-index --find-links=/kaggle/input/pytorch-and-libs -U torch -qq #torch 2.3.1
+
 if VLLM:
     %env MAX_JOBS = 4
-    !pip uninstall -q -y torch
-    !pip install -q -U --no-index --find-links=/kaggle/input/vllm-whl -U vllm
     #!pip install -U /kaggle/input/bitsandbytes-0-42-0-py3-none-any-whl/bitsandbytes-0.42.0-py3-none-any.whl
     !pip install -q -U --upgrade /kaggle/input/vllm-t4-fix/grpcio-1.62.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl
     !pip install -q -U --upgrade /kaggle/input/vllm-t4-fix/ray-2.11.0-cp310-cp310-manylinux2014_x86_64.whl
@@ -128,15 +135,16 @@ LOG_NAME = time.strftime("%Y%m%d-%H%M-") + LOG_TAG + ".csv"
 print(f"P100={P100}, DEVICE={DEVICE}, QUANT={QUANT}, SLOW={SLOW}")
 print(LOG_NAME)
 
-# %% [markdown]
-# # Install and import libraries, aimo/dummy module
-
 # %% _kg_hide-input=true
 %%time
-if (VLLM or QUANT) and not 'installed_libs' in globals():
+if (QUANT2 or VLLM or QUANT) and not 'installed_libs' in globals():
     # Need more recent accelerate
-    !pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
-    !pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
+    # https://www.kaggle.com/datasets/anrenk/accelerate-0-29-3/versions/1
+    # https://www.kaggle.com/datasets/anrenk/bitsandbytes-0-43-1/versions/1
+    #!pip install -U /kaggle/input/accelerate-0-29-3/accelerate-0.29.3-py3-none-any.whl -qq
+    !pip install -U /kaggle/input/pytorch-2-3-0-and-libs/accelerate-0.29.3-py3-none-any.whl -qq
+    #!pip install -U /kaggle/input/bitsandbytes-0-43-1/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
+    !pip install -U /kaggle/input/pytorch-2-3-0-and-libs/bitsandbytes-0.43.1-py3-none-manylinux_2_24_x86_64.whl -qq
     installed_libs = True
     
 !pip install -U /kaggle/input/z3-python-wheel/z3_solver-4.12.5.0-py2.py3-none-manylinux2014_x86_64.whl -qq
@@ -369,70 +377,6 @@ def process_text_output(result):
 
 
 # %% [markdown]
-# # OLD Code process
-
-# %% _kg_hide-input=true
-#####################################
-
-if OLDCODE:
-
-    def return_last_print(output, n):
-        lines = output.strip().split('\n')
-        if lines:
-            return lines[n]
-        else:
-            return ""
-
-    def repl(match):
-        if "real" not in match.group():
-            return "{}{}".format(match.group()[:-1], ', real=True)')
-        else:
-            return "{}{}".format(match.group()[:-1], ')')
-
-    def process_code(code, return_shell_output=True):
-
-        code = re.sub(r"symbols\([^)]+\)", repl, code)
-
-        if return_shell_output:
-            code = code.replace('\n', '\n    ')
-                # Add a try...except block
-            code = "\ntry:\n    from sympy import *\n{}\nexcept Exception as e:\n    print(e)\n    print('FAIL')\n".format(code)
-
-        if not return_shell_output:
-            print(code)
-        with open('code.py', 'w') as fout:
-            fout.write(code)
-
-        batcmd = 'timeout 7 ' + sys.executable + ' code.py'
-        try:
-            shell_output = subprocess.check_output(batcmd, shell=True).decode('utf8')
-            return_value = return_last_print(shell_output, -1)
-            print(shell_output)
-            if return_shell_output:
-                if return_value=='FAIL':
-                    CODE_STATUS = False
-                    return_value = return_last_print(shell_output, -2)
-                    if "not defined" in return_value:
-                        return_value+='\nTry checking the formatting and imports'
-                else:
-                    CODE_STATUS = True
-                return return_value, CODE_STATUS  
-            code_output = round(float(eval(return_value))) % 1000
-        except Exception as e:
-            print(e,'shell_output')
-            code_output = -1
-
-        if return_shell_output:
-            if code_output==-1:
-                CODE_STATUS = False
-            else:
-                CODE_STATUS = True
-            return code_output, CODE_STATUS  
-    
-
-
-
-# %% [markdown]
 # # Util
 
 # %%
@@ -469,8 +413,9 @@ def show_model_mem(model):
     class MemUse: params, bufs = 0, 0
     counts = defaultdict(MemUse)
     for buf in model.parameters():
-        print("size", buf.numel() * buf.itemsize)
+        #print("size", buf.numel() * buf.itemsize)
         counts[buf.device].params += buf.numel() * buf.itemsize
+    print("buffers:")
     for buf in model.buffers():
         counts[buf.device].bufs += buf.numel() * buf.itemsize
     print("Model parameters+buffers:")
@@ -500,14 +445,49 @@ def nvidia_pstate() -> str:
         info += "]) "
     return info
 
+def module_size(mod):
+    total = 0
+    for param in mod.parameters():
+        #print(name, param.device, param.numel(), param.itemsize, param.name)
+        total += param.numel() * param.itemsize
+    return total
+
+def move_model_layers_to(model, device, MB = {'cuda:0':1500, 'cuda:1':1500}):
+    moved = defaultdict(int)
+    for name, mod in list(model.named_modules()):
+        if isinstance(mod, torch.nn.modules.module.Module) and re.match('^model.layers.\d+$',  name):
+            olddevice = str(next(mod.parameters()).device)
+            if moved[olddevice] >= MB.get(olddevice, 0) * 2**20:
+                continue
+            print(f"Moving {name} from {olddevice}")
+            mod._former_device = olddevice
+            mod.to(device)
+            moved[olddevice] += module_size(mod)
+            # if moved >= MB * 2**20:
+            #     break
+    print("Moved", {dev:int(amnt/2**20) for (dev,amnt) in moved.items()}, "MB to", device)
+
+def move_model_layers_back(model):
+    moved = defaultdict(int)
+    for name, mod in list(model.named_modules()):
+        if hasattr(mod, '_former_device'):
+            olddevice = str(next(mod.parameters()).device)
+            print(f"Moving {name} from {olddevice} to {mod._former_device}")
+            moved[mod._former_device] += module_size(mod)
+            mod.to(mod._former_device)
+            del mod._former_device
+    print("Moved", {dev:int(amnt/2**20) for (dev,amnt) in moved.items()}, "MB")
+
 
 # %% [markdown]
 # # Load model
 
 # %%
+multiprocessing.set_start_method("spawn")
+
+# %%
 %%time
 transformers.set_seed(SEED)
-multiprocessing.set_start_method("spawn")
 
 
 def load_model(MODEL_PATH, QUANT, device_map = None):
@@ -541,7 +521,7 @@ def load_model(MODEL_PATH, QUANT, device_map = None):
         return model
     else:
 
-        config = transformers.AutoConfig.from_pretrained(MODEL_PATH)
+        config = transformers.AutoConfig.from_pretrained(MODEL_PATH, use_cache=True)
 
         tokenizer = transformers.AutoTokenizer.from_pretrained(MODEL_PATH)
 
@@ -565,17 +545,15 @@ def load_model(MODEL_PATH, QUANT, device_map = None):
 
         model = transformers.AutoModelForCausalLM.from_pretrained(
             MODEL_PATH,
-            torch_dtype="auto",
-            #use_flash_attention_2=True,
+            torch_dtype=torch.float16,
             trust_remote_code=True,
             config=config,
             **model_kwargs
         )
 
         # Disable memory-efficient sparse tensors for CUDA operations
-        torch.backends.cuda.enable_mem_efficient_sdp(False)
+        #torch.backends.cuda.enable_mem_efficient_sdp(False) ######### SDP
 
-        #print(model)
         print()
         print("Model", MODEL_PATH)
         print("dtype", model.dtype, model.hf_device_map)
@@ -590,9 +568,40 @@ if not 'model' in globals() or RELOAD_MODEL:
 if model is None:
     model, tokenizer = load_model(MODEL_PATH, QUANT)
 
-model2, tokenizer2 = load_model(MODEL_PATH2, QUANT2, "auto")
+
+if not 'model2' in globals() or RELOAD_MODEL2:
+    model2 = None
+    gc.collect()
+    torch.cuda.empty_cache()
+if model2 is None:
+    # FOR MISTRAL
+
+    device_map = [('model.embed_tokens', 0)] + [(f'model.layers.{i}', 0 if i < 16 else 1) for i in range(0, 32)] + [
+                     ('model.norm', 1),
+                     ('lm_head', 1)]
+    device_map = {ii:jj for (ii,jj) in device_map}
+
+    model2, tokenizer2 = load_model(MODEL_PATH2, QUANT2, device_map) # if QUANT2 else "auto")
         
 show_gpu_mem()
+
+# %%
+#dir(torch.backends.cuda)
+torch.backends.cuda.enable_mem_efficient_sdp(True)
+print(torch.backends.cuda.flash_sdp_enabled())
+print(torch.backends.cuda.math_sdp_enabled())
+print(torch.backends.cuda.mem_efficient_sdp_enabled())
+#print(torch.backends.opt_einsum.is_available())
+#print(torch.backends.opt_einsum.enabled)
+
+
+# TEST SDPA
+
+query = torch.rand(32, 8, 128, 64, dtype=torch.bfloat16, device="cuda")
+key = torch.rand(32, 8, 128, 64, dtype=torch.bfloat16, device="cuda")
+value = torch.rand(32, 8, 128, 64, dtype=torch.bfloat16, device="cuda")
+
+res = torch.nn.functional.scaled_dot_product_attention(query,key,value)
 
 
 # %%
@@ -618,7 +627,7 @@ class StoppingCriteriaSub(transformers.StoppingCriteria):
         self.stops = []
         for stop_word in stops:
             if need_safetok:
-                toks = safe_tok_line(stop_word)
+                toks = safe_tok_line(stop_word, tokenizer)
             else:
                 toks = tokenizer(stop_word, return_tensors='pt', add_special_tokens=False)['input_ids'][0]
             if stop_word.endswith("DROP"):
@@ -673,20 +682,26 @@ class NGramStoppingCriteria(transformers.StoppingCriteria):
         self.ngrams.add(suffix)
         return False
     
-    
+
 BEFORE_DOCSTRING = "():\n   "  # 3 spaces! A 4th space is part of the next token!
 
 # ```->[10897], ````->[4885, 4885], `````->[4885, 10897], ``````->[4885, 4885, 4885]
 stop_words = ["```output", "```python", "```\nOutput" , ")\n```" , ")\n\n```" , "```\n", "````"] #, BEFORE_DOCSTRING]
 main_stoplist = StoppingCriteriaSub(model, tokenizer, stop_words)
 error_stoplist = StoppingCriteriaSub(model, tokenizer, [" error", " mistake"], [" trial and error"])
-ngram_stopper = NGramStoppingCriteria(140)
+ngram_stopper = NGramStoppingCriteria(130)
 
-stopping_criteria = transformers.StoppingCriteriaList([ngram_stopper, main_stoplist])
-error_stopping_criteria = transformers.StoppingCriteriaList([ngram_stopper, main_stoplist, error_stoplist])
+def deepseek_stoppers():
+    stopping_criteria = transformers.StoppingCriteriaList([ngram_stopper, main_stoplist])
+    error_stopping_criteria = transformers.StoppingCriteriaList([ngram_stopper, main_stoplist, error_stoplist])
+    
+    return stopping_criteria, error_stopping_criteria
 
-#stopping_criteria = transformers.StoppingCriteriaList([main_stoplist])
-#error_stopping_criteria = transformers.StoppingCriteriaList([main_stoplist, error_stoplist])
+def other_stoppers():
+    stop_words2 = ["```", "```\n", "````"]
+    stoplister2 = StoppingCriteriaSub(model2, tokenizer2, stop_words2, need_safetok =True)
+    stopping_criteria2 = transformers.StoppingCriteriaList([stoplister2])
+    return stopping_criteria2, stopping_criteria2
 
 #torch.cuda.empty_cache()
 #gc.collect()
@@ -700,6 +715,7 @@ class GenStreamWatcher(transformers.generation.streamers.BaseStreamer):
         # First the prompt is fed in, before KVs are built for it.
         if list(token_ids.shape) == [1]:
             self.tokens.append(token_ids.tolist()[0])
+            #self.tokens.append(token_ids[0])
             if self.start_time is None:
                 #print("stream start")
                 self.start_time = time.time()
@@ -897,12 +913,14 @@ prompt_options = [compute0, tool0, analy2] # 16
 prompt_options = [compute0, tool0, tool1, steps1, analy2]  #, elab0tool, ]
 prompt_options = [tool1, analy2] # 21, 17, X16
 prompt_options = [elab0tool, tool1]
+prompt_options = [tool1]
 #prompt_options = [tool1, elab0tool, compute0]   # for validation
 
 # %% [markdown]
 # # Generation and main loop
 
 # %%
+# It grew out of control...
 
 class LLMGenerator:
     def __init__(self, model, tokenizer, first_model = True):
@@ -921,6 +939,9 @@ class LLMGenerator:
         self.deepseek = deepseek
         if deepseek:
             ngram_stopper.reset()
+            self.stoppers = deepseek_stoppers()
+        else:
+            self.stoppers = other_stoppers()
 
     def update_inputs(self):
         if True:
@@ -929,7 +950,7 @@ class LLMGenerator:
         else:
             self.model_inputs = self.tokenizer.apply_chat_template(self.messages, add_generation_prompt=True, return_tensors="pt").to(self.model.device)
         self.tokens = self.model_inputs['input_ids'][0]
-        #self.decode_tokens()
+        self.decode_tokens()   # Fix off by one bug in .new_output
         
     def decode_tokens(self):
         self.prompt = self.tokenizer.decode(self.tokens, skip_special_tokens = False)
@@ -984,24 +1005,25 @@ class LLMGenerator:
         max_toks = min(MAX_SINGLE_GEN_TOKENS, MAX_TOKENS - len(self.tokens), MAX_GEN_TOKENS - self.num_gen_tokens)
         return max_toks
 
-    def generate(self, temperature = 0.9, top_p = 1.0, limit = 9999, show = True):
+    def generate(self, temperature = 0.9, top_p = 1.0, limit = 9999, show = True, skip_check = False):
         startt = time.time()
-        max_toks = self.check_limit()
-        if max_toks < 3:
-            print("SKIP GENERATE DUE TO LIMIT")
-            return
-
-        if self.first_model:
-            #if self.need_update:
-            #    self.update_inputs()  # Regenerate model_input
-            if self.stop_on_error:
-                stopper = error_stopping_criteria
-            else:
-                stopper = stopping_criteria
+        if skip_check:
+            max_toks = limit
         else:
-            stopper = None
+            max_toks = self.check_limit()
+            if max_toks < 3:
+                print("SKIP GENERATE DUE TO LIMIT")
+                self.new_output = ""
+                return
 
-        streamer = GenStreamWatcher()
+        #if self.need_update:
+        #    self.update_inputs()  # Regenerate model_input
+        if self.stop_on_error:
+            stopper = self.stoppers[1] #error_stopping_criteria
+        else:
+            stopper = self.stoppers[0] #stopping_criteria
+
+        streamer = None  #GenStreamWatcher()
         
             
         input_len = len(self.tokens)
@@ -1022,11 +1044,16 @@ class LLMGenerator:
                                                stopping_criteria = stopper)
         except (torch.cuda.OutOfMemoryError, RuntimeError) as e: # RuntimeError if pytorch caching allocator disabled
             print(e)
+            if streamer is None:
+                raise
+            if len(streamer.tokens) == 0:
+                print("OOM: tried to recover but no tokens generated")
             self.hit_limit = True
             self.past_key_values = None
-            self.tokens += streamer.tokens
+            self.tokens = torch.tensor(self.tokens.tolist() + streamer.tokens)
             print("OOM recovered")
             self.model_inputs = {'input_ids': self.tokens}  # torch.tensor([self.tokens]).to(self.model.device)
+            gentime = time.time() - startt
         else:
             if USE_PAST_KEY:
                 sequences = generation_output.sequences
@@ -1034,10 +1061,14 @@ class LLMGenerator:
             else:
                 sequences = generation_output
 
-            assert sequences[0][input_len:].tolist() == streamer.tokens  # Checked it passes, so now leave commented
+
             self.tokens = sequences[0]
             self.model_inputs = {'input_ids': sequences}
-        gentime = time.time() - streamer.start_time
+            if streamer:
+                assert sequences[0][input_len:].tolist() == streamer.tokens  # Checked it passes, so now leave commented
+                gentime = time.time() - streamer.start_time
+            else:
+                gentime = time.time() - startt
 
         decoded_output = self.tokenizer.decode(self.tokens, skip_special_tokens = False)
         self.new_output = decoded_output[len(self.prompt):]
@@ -1050,15 +1081,16 @@ class LLMGenerator:
 
         new_toks = len(self.tokens) - input_len
         self.num_gen_tokens += new_toks
-        if new_toks >= MAX_SINGLE_GEN_TOKENS:
-            print("HIT MAX_SINGLE_GEN_TOKENS")
-            self.hit_limit = True
-        if self.num_gen_tokens >= MAX_GEN_TOKENS:
-            print("HIT MAX_GEN_TOKENS")
-            self.hit_limit = True   # TODO: instead append  "...\nPutting that into code:\n```python"
-        if len(self.tokens) >= MAX_TOKENS:
-            print("HIT MAX_TOKENS")
-            self.hit_limit = True
+        if not skip_check:
+            if new_toks >= MAX_SINGLE_GEN_TOKENS:
+                print("HIT MAX_SINGLE_GEN_TOKENS")
+                self.hit_limit = True
+            if self.num_gen_tokens >= MAX_GEN_TOKENS:
+                print("HIT MAX_GEN_TOKENS")
+                self.hit_limit = True   # TODO: instead append  "...\nPutting that into code:\n```python"
+            if len(self.tokens) >= MAX_TOKENS:
+                print("HIT MAX_TOKENS")
+                self.hit_limit = True
 
         if show:
             print(f"<<<<<GEN {new_toks} tokens ({len(self.tokens)} total) in {gentime :.2f}+{runt - gentime :.2f}s ({(new_toks-1)/gentime :.2f} tok/s) ({cpu_time()}) {gpu_mem()} {nvidia_pstate()}\n"
@@ -1075,7 +1107,7 @@ class LLMGenerator:
 # %%
 if LOGGING:
     logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'score', 'answer', 'result_info', 'gen_tokens', 'code_blocks', 'code_errors', 'time', 'bad'])
-    
+
 
 def predict(probi, problem):
 
@@ -1092,21 +1124,45 @@ def predict(probi, problem):
     time_for_item = time_left / max(1, NPROBS - probi)
     item_time_start = time.time()
 
-    def model2makegen():
-        return LLMGenerator(model2, tokenizer2)
+    scorelog = llm_prompting.ScoreLog()
+    
+    # ζolve
+    if True:
+        try:
+            torch.cuda.empty_cache()
+            gc.collect()
+            # Remove part of first model (DeepSeek-Math-7b-rl) from GPU, only takes few seconds
+            move_model_layers_to(model, 'cpu', {'cuda:0':3900, 'cuda:1':3900})
+            move_model_layers_back(model2)
+            torch.cuda.empty_cache()
+            gc.collect()
 
-    ζol = ζolver(problem)
-    solved = ζol.doit(model2makegen, timeout = min(time_for_item, 120), hard_timelimit = NOTEBOOK_START_TIME + TIME_LIMIT)
-    print(f"{int(item_time_start)}s spent in ζolve()")
-    #scorelog = llm_prompting.ScoreLog()
-    scorelog = ζol.scorelog
-    if solved:
-        return scorelog.best
+            def model2makegen():
+                return LLMGenerator(model2, tokenizer2, first_model = False)
+
+            ζol = llm_prompting.ζolver(problem)
+            #ζol = ζolver(problem)
+            solved = ζol.doit(model2, tokenizer2, model2makegen, timeout = min(time_for_item, 150), hard_timelimit = NOTEBOOK_START_TIME + TIME_LIMIT)
+            print(f"{int(time.time() - item_time_start)}s spent in ζolve()")
+            best = ζol.best
+            scorelog = ζol.scorelog
+            if solved:
+                return ζol.best
+            
+            # Fix occasional OOM
+            move_model_layers_to(model2, 'cpu', {'cuda:0':800, 'cuda:1':800})
+        except Exception as e:
+            print("UNCAUGHT EXCEPTION!!!!!!!!!!!!!!!!!!!!!!!")
+            print(e)
+
+
+    move_model_layers_back(model)
 
     for jj in range(N_REPETITIONS): # tqdm(range(N_REPETITIONS)):
 
-        temperature = 0.9 * (0.3+0.25*jj) / (0.25*jj + 1)  # 0.27 0.40 0.48 0.54 0.59 0.62 0.65 ... 0.71
-        #temperature = (0.35+0.25*jj) / (0.25*jj + 1)   # 0.35 0.48 0.57 .... 0.8
+        #temperature = 0.9 * (0.3+0.25*jj) / (0.25*jj + 1)  # 0.27 0.40 0.48 0.54 0.59 0.62 0.65 ... 0.71 ... ?
+        temperature = (0.35+0.25*jj) / (0.25*jj + 1)   # 0.35 0.48 0.57 .... 0.8 ... 0.89
+        #temperature = (0.5+0.15*jj) / (0.15*jj + 1)   # 0.5 0.56 ... 0.79... 0.87
         temperature_coding = temperature
         
         it_start_time = time.time()
@@ -1115,11 +1171,7 @@ def predict(probi, problem):
         print(f"\n\n----QUESTION {probi} - rep.{jj} - time_spent : {time_spent:.0f}/{TIME_LIMIT}, on this prob: {spent_this_prob:.1f}/{time_for_item:.0f} secs")
         if time_spent > TIME_LIMIT or spent_this_prob > time_for_item:
             break
-            
-        print(psutil.cpu_stats())
-        print(psutil.cpu_times())
-        print()
-        
+
         for _ in range(5):
             torch.cuda.empty_cache()
             gc.collect()
@@ -1148,6 +1200,10 @@ def predict(probi, problem):
         cumulative_code = ""
         
         try:
+            print(psutil.cpu_stats())
+            print(psutil.cpu_times())
+            print()
+            
             gen = LLMGenerator(model, tokenizer, True)
             gen.set_bad_words([' """', " '''", '():\n    r'])  # disallow  r""" too
 
@@ -1470,7 +1526,8 @@ for probi, (test, sample_submission) in enumerate(iter_test):
     transformers.set_seed(SEED)
     sample_submission['answer'] = predict(probi, test['problem'].values[0])
     #print(f"Making prediction for ""{test[:100]}"": {sample_submission}")
-    env.predict(sample_submission)
+    with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True): #, enable_cudnn=True ):
+        env.predict(sample_submission)
 
 # %%
 if not PRIVATE:
@@ -1480,3 +1537,20 @@ if not PRIVATE:
     print(env.df)
     score = (env.df.ground_truth == env.df.answer).sum()
     print(f'{score} matches in {len(env.df)} examples')
+
+# %%
+if False:
+    show_model_mem(model)
+    show_gpu_mem()
+    model.cpu_offload()
+    show_model_mem(model)
+    show_gpu_mem()
+
+# %%
+if False:
+    import importlib
+
+    # make changes to example.py file
+    import llm_util
+    importlib.reload(llm_util)
+

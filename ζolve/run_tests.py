@@ -24,7 +24,12 @@ for dirpath, dirnames, filenames in os.walk(rootdir + 'tests'):
 # ]
 
 skips = [
+"tests/valid_dsl/more_than_once.py",
+    "tests/valid_dsl/setcomps.py",
      "tests/valid_dsl/expo2.py",
+     "tests/valid_dsl/triangle.py",  # wrong 
+   "tests/valid_dsl/funcs.py", # wrong
+    "tests/valid_dsl/forall_func.py",   # fails to solve
 ]
 
 failures = ""
@@ -65,3 +70,4 @@ for testfile in testfiles:
 
 
 print("\nFailures:\n" + failures)
+

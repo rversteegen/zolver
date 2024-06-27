@@ -1,4 +1,4 @@
-s : Seq(Int, len = 5)
+s : Set(Int, len = 5)
 # The median of s is 9
 #median(s) == 9
 # The average of s is 10
@@ -7,6 +7,6 @@ average(s) == 10
 #count(x == 8 for x in s) == 1
 # The largest possible integer that could appear in s is the maximum of all possible assignments to s
 #goal = max(s)
-s[0]==2
+min(s)==2
 goal = median(s)
 expected_answer = 'notunique'

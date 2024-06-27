@@ -209,8 +209,8 @@ def reify_collection(seq, sort = False):
                     return elements
                 except TypeError:
                     pass    # Can't compare
-            # This can be done by adding yet more variables
-            raise NotImplementedError("Returning sorted elements")
+                # This can be done by adding yet more variables
+                raise NotImplementedError("Returning sorted elements")
         return elements
     else:
         assert False, "reify_collection strange arg: " + str(seq)

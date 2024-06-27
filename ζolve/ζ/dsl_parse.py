@@ -25,6 +25,7 @@ exec('from ζ.dsl import *', global_namespace)
 SECONDS_LIMIT = 6
 MB_LIMIT = 4000  # Minimum needed is about 185
 
+lenient = True
 
 
 ################################################################################
@@ -132,7 +133,6 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
             print("-=-------- PARSE", node)
             return node
         else:
-            print("NAME", node.id)
             return node
             # return ast.fix_missing_locations(
             #     ast.Call(func=ast.Name('declarevar', ast.Load()),
