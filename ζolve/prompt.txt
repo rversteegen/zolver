@@ -109,7 +109,7 @@ ForAll(fib[i] == fib[i - 1] + fib[i - 2] for i in Int if i > 2)
 • the set of integer pairs {(x, y) | s.t. p(x, y)} → set([x, y] for x in Int for y in Int if p(x, y))
 • the range of function f(x) on the closed interval [a, b] → set(f(x) for x in Real if a <= x <= b)
 • the smallest element in set or sequence S → min(S)   %% max(S) is the largest
-• all possible values of expression e given all constraints → set(e)
+[NOTE] Notimpl • all possible values of expression e given all constraints → set(e)
 • the largest possible value of e → max(e)
 • the number of possible values of e → count(e)
 • the value x ∈ S for which f(x) attains the maximum → argmax(f(x) for x in S)
