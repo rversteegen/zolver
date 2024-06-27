@@ -158,9 +158,9 @@ class SetObject(sympy.Set):  #sympy.Basic):
     syms = None
     constraints = None
 
-    def __init__(self):
-        "No args allowed. Constructed by set_generator"
-        super().__init__()
+    # def __init__(self, *fakeargs):
+    #     "No args allowed. Constructed by set_generator"
+    #     super().__init__(*fakeargs)
 
     def __repr__(self):
         return self.__str__()
@@ -225,14 +225,17 @@ def finite_set_constructor(objects):
     print("FINITE_SET_CONSTRUCTOR", objects)
     obj = SetObject()
     obj.evaluated = objects
+    obj._args = [objects]
     return obj
 
 def set_generator(expr, vars, make_seq, *constraints):
     print("SETCONSTR", expr, vars, constraints)
+    # We're meant to be immutable, so make sure have unique args so don't get cache-replaced
+    fakeargs = sympy.Dummy(f"{expr}, {vars}, {constraints}")
     if make_seq:
-        obj = SeqObject()
+        obj = SeqObject(fakeargs)
     else:
-        obj = SetObject()
+        obj = SetObject(fakeargs)
     syms = []
     # A dict of "for varname in vset"
     for vname, vset in vars.items():
@@ -241,16 +244,19 @@ def set_generator(expr, vars, make_seq, *constraints):
             vtype = vset.element_type
         else:
             vtype = vset
+        dummy = ζ.dsl._ctx.locals[vname]
         sym = declarevar(vname, vtype)
         # The symbol can inherit membership info directly
         sym.var_in_set = vset
         syms.append(sym)
-        dummy = ζ.dsl._ctx.locals[vname]
-        print(f"set_generator: replacing dummy {dummy} {type(dummy)} with real {sym} {type(sym)}")
+        print(f"set_generator: replacing {dummy} with real {sym}")# {type(sym)}")
         expr = expr.xreplace({dummy : sym})
+        constraints = [cons.xreplace({dummy : sym}) for cons in constraints]
 
+    #print("expr now", expr)
     obj.expr = expr
     obj.syms = syms
+    obj.constraints = constraints
 
     print("syms", syms)
     return obj

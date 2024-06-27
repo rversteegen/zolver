@@ -92,6 +92,7 @@ class SympyToZ3:
             sympy.Mul:         lambda node, *args:  reduce((lambda lhs, rhs: lhs * rhs), args),
             #sympy.Mul:        lambda node, lhs, rhs:  lhs * rhs,
             sympy.Eq:          lambda node, lhs, rhs:  lhs == rhs,
+            sympy.Ne:          lambda node, lhs, rhs:  lhs != rhs,
             sympy.Le:          lambda node, lhs, rhs:  lhs <= rhs,
             sympy.Lt:          lambda node, lhs, rhs:  lhs <  rhs,
             sympy.Ge:          lambda node, lhs, rhs:  lhs >= rhs,
@@ -105,6 +106,7 @@ class SympyToZ3:
 
             dsl.If:            lambda node, C, T, E:  If(C, T, E),
             sympy.Not:         lambda node, arg:  Not(arg),
+            #dsl.ForAll:        self.ForAll_to_z3,
 
 
             sympy.Integer:     lambda node:  IntVal(node.p),
@@ -179,7 +181,7 @@ class SympyToZ3:
 
     # UNUSED
     def pow_to_z3(self, node: sympy.Pow) -> AstRef:
-        expo = node.children[1]
+        expo = node.args[1]
         # Actually... x**y is alright.
         if not expo.is_constant():   #is_a_constant
             raise NotImplementedError("Nonconstant exponents")
@@ -187,7 +189,36 @@ class SympyToZ3:
         #if isinstance
 
     def ForAll_to_z3(self, node: dsl.ForAll):
-        ret = ForAll()
+        if len(node.args) != 1 or not isinstance(node.args[0], dsl.SetObject):
+            assert False, "Bad ForAll args " + str(node.args)
+        setobj = node.args[0]
+        if setobj.expr is not None:
+            # Generator
+
+            syms = [self.to_z3(sym) for sym in setobj.syms]
+
+            expr = self.to_z3(setobj.expr)
+            if setobj.constraints:
+                cons = list(map(self.to_z3, setobj.constraints))
+                print("z3: constraints", setobj.constraints , " ->" , cons)
+                constraints = And(cons)
+                print("z3: constraints", setobj.constraints , " AND->" , constraints)
+                expr = Implies(constraints, expr)
+
+            ret = ForAll(syms, expr)
+            #print("TRANSLATED ", node, "TO", ret)
+
+
+        elif setobj.evaluated is not None:
+            # Finite set???
+            # objs = [self.to_z3(obj) for obj in setobj.evaluated]
+            # ret = []
+            # for obj in objs:
+            assert False, "ForAll arg is finite set"
+        else:
+            # Uninterpreted set? Doesn't happen
+            assert False, "ζ3: ForAll: Unknown set type " + setobj
+
         return ret
 
 
@@ -250,6 +281,11 @@ class SympyToZ3:
                 # The first arg to AppliedPredicate is the predicate, get rid of that
                 args = args[1:]
 
+        # Specials which handle translation of their args themselves
+        elif isinstance(node, dsl.ForAll):
+            return self.ForAll_to_z3(node)
+
+
         if trans is None:
             print("to_z3 Unimplemented:", node, ", type =", type(node), ", func =", node.func)
             raise NotImplementedError("translating " + str(node))
@@ -308,6 +344,8 @@ class Z3Solver():
     solution_attained = False  # For Optimizer(), whether can reach the limit, not just inf/sup
 
     skipped_print_times = 0
+    first_print = True
+    print_all_checks = True
 
     def __init__(self, goal):
         self.solutions = set()
@@ -400,6 +438,7 @@ class Z3Solver():
     def count_solutions(self):
         "For goal_func = 'count'"
 
+        self.print_all_checks = False
         start_time = time.time()
         timeout = start_time + global_timeout_ms / 1000
 
@@ -494,6 +533,7 @@ class Z3Solver():
         -unknown:   if unsolved
         """
         #print("z3 solver =", self.sol)
+        self.lastprint_time = time.time()
 
         # goal is min() or max()
         if self.objective is not None:
@@ -508,7 +548,7 @@ class Z3Solver():
         if ret in (unsat, unknown):
             return clean_sat(ret)
 
-        ret = self.find_one_solution()
+        ret = self.find_one_solution(v = False)
         if ret == sat:
             return notunique
         if ret == unknown:
@@ -541,10 +581,11 @@ class Z3Solver():
         thetime = time.time()
         ctime = thetime - stime
         self.skipped_print_times += 1
-        firstprint = not(hasattr(self, 'lastprint_time'))
-        if firstprint or thetime > self.lastprint_time + 1.0:
-            if not firstprint:
+
+        if self.print_all_checks or self.first_print or thetime > self.lastprint_time + 1.0:
+            if not self.first_print:
                 ctime = thetime - self.lastprint_time
+            self.first_print = False
             print(f"{tag} {self.skipped_print_times}x check() = {self._result} in {1e3 * ctime :.1f}ms")
             self.lastprint_time = thetime
             self.skipped_print_times = 0

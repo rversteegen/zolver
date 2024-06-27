@@ -65,12 +65,12 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
             #print("WARNING: " + name + " is used in nested comprehensions or twice, not supported")
             raise DSLError(name + " is used in nested comprehensions or twice, not supported")
         # temp Dummy whch is replaced by subs by set_generator by a properly constructed symbol
-        sym = sympy.Dummy()
+        global dummy_idx
+        dummy_idx += 1
+        sym = sympy.Dummy('dummy' + str(dummy_idx))
         dummy_name = sym.name
         self.local_dict[dummy_name] = sym
 
-        # global dummy_idx
-        # dummy_idx += 1
         # dummy_name = "dummy_" + str(dummy_idx)
         # #self.local_dict[sym.name] = 
         # #sym = self.local_dict['declarevar'](dummy_name, Type)
@@ -166,6 +166,8 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
             left, right = args[idx], args[idx+1]
             if isinstance(op, ast.Eq):
                 newcomp = makeCall('Eq', [left, right])
+            elif isinstance(op, ast.NotEq):
+                newcomp = makeCall('Ne', [left, right])
             elif isinstance(op, ast.In):
                 newcomp = makeCall('Element', [left, right])
                 #assert len(args) == 2

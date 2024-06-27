@@ -85,7 +85,9 @@ class ForAll(BoolReturningFunction):
             raise TypeError("ForAll should have one arg, got " + str(args))
         if not isinstance(args[0], SetObject):
             raise TypeError("ForAll argument should be a comprehension, got " + str(args[0]))
+        #print("Createing ForAll with", cls, args)
         ret = super().__new__(cls, *args)
+        return ret
 
 
 def Exists(vars, *args):

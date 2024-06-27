@@ -11,19 +11,27 @@ testfiles =[]
 for dirpath, dirnames, filenames in os.walk(rootdir + 'tests'):
     for fname in filenames:
         if fname.endswith('.py'):
-            testfiles.append(os.path.join(dirpath, fname))
+            testfiles.append(os.path.join(dirpath, fname).replace(rootdir, ''))
 
-testfiles = [
-    #"examples/AIMO_example4.py"
-    # "tests/valid_dsl/count-734.py"
-    # "tests/valid_dsl/count-simple.py"
-    "tests/valid_dsl/forall.py"
+# testfiles = [
+#     #"examples/AIMO_example4.py"
+#     # "tests/valid_dsl/count-734.py"
+#     # "tests/valid_dsl/count-simple.py"
+#     "tests/valid_dsl/forall.py",
+#     "tests/valid_dsl/forall2.py",
+#     "tests/valid_dsl/forall3.py",
+#     "tests/valid_dsl/forall4.py",
+# ]
+
+skips = [
+     "tests/valid_dsl/expo2.py",
 ]
-
 
 failures = ""
 
 for testfile in testfiles:
+    if testfile in skips:
+        continue
     print("\n######################################## Testing", testfile)
     workspace = ζ.dsl_parse.load_dsl_file(rootdir + testfile, verbose = True)#False)
     ret = workspace.solve()
@@ -44,6 +52,7 @@ for testfile in testfiles:
         print("Expected", repr(expected), "got", ans)
         failures += testfile + "\n"
     else:
+        print("Got expected", ans)
         print("PASS")
 
 
