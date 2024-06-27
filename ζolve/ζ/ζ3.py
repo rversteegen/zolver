@@ -161,20 +161,24 @@ class SympyToZ3:
 
         # FIXME: Symbol properties are ignores, therefore we translate Nat and Real the same!
 
-        if sym.var_type == dsl.Bool:
+        Type = dsl.get_type_of_expr(sym)
+
+        if Type == dsl.Bool:
             z3var = Bool(sym.name)
-        elif sym.var_type == dsl.Int or sym.is_integer:
+        elif Type == dsl.Int:
             z3var = Int(sym.name)
-        elif sym.is_rational:  # ...sym.var_type == dsl.Rat which is dsl.Real
+        elif Type == dsl.Rational:  #  ==  dsl.Real
             # Note Z3 doesn't have a RatSort, rationals are RealSort.
             z3var = Real(sym.name)
             # TODO, add rational constraint? Probably hardly matters
-        elif sym.var_type == dsl.Complex or not sym.is_real:
-            assert sym.is_complex, f"Variable {sym} has unknown domain"
+        elif Type == dsl.Complex:
             raise NotImplementedError("Complex variable")
-        else:  # dsl.Real
+        elif Type == dsl.Real:
             # Assume real, but sympy doesn't assume a plain Symbol() is real
             z3var = Real(sym.name)
+        else:
+            assert isinstance(sym, dsl.ζObjectSymbol), "unknown symbol type"
+            assert False  # We already checked  #raise NotImplementedError(f"Variable {sym} has unknown domain {sym.var_type}")
 
         self.varmap[sym] = z3var
         return z3var
@@ -376,7 +380,8 @@ class Z3Solver():
             if isinstance(goal, dsl.ζcount):
                 # Strip the count()
                 assert len(goal.args) == 1
-                assert isinstance(goal.args[0], sympy.Basic)
+                if not isinstance(goal.args[0], sympy.Basic):
+                    raise dsl.DSLError("count() with non-sym arg: " + str(goal.args))
                 goal = goal.args[0]
                 self.goal_func = 'count'
                 # If counting a Seq/Set, translate it

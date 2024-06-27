@@ -187,6 +187,51 @@ class ζcount(sympy.Basic):
 
 count = ζcount
 
+
+def reify_collection(seq, sort = False):
+    if isinstance(seq, (list,tuple,set)):
+        seq = list(seq)
+        if sort:
+            seq = sorted(seq)
+        return seq
+    elif isinstance(seq, SetObject):
+        elements, are_vars = seq.inst_element_list()
+        if elements is None:
+            raise NotImplementedError("Combination op on a set/seq with unknown length")
+        if sort:
+            if are_vars and not seq.is_Seq:
+                # The vars are automatically sorted
+                pass
+            else:
+                try:
+                    # Sympy maybe can
+                    elements = sorted(elements)
+                    print("! sorted(elements) worked!")
+                    return elements
+                except TypeError:
+                    pass    # Can't compare
+            # This can be done by adding yet more variables
+            raise NotImplementedError("Returning sorted elements")
+        return elements
+    else:
+        assert False, "reify_collection strange arg: " + str(seq)
+
+def average(seq):
+    elements = reify_collection(seq)
+    print("average: got elmenets", elements)
+    return sympy.Add(*elements) / len(elements)
+
+def median(seq):
+    elements = reify_collection(seq)
+    # What if even??
+    middle = len(elements) // 2
+    if len(elements) % 2:
+        if len(elements) == 0:
+            raise DSLValueError("Can't get median of an empty set")
+        # if elements[middle] != elements[middle + 1]:   # Wait, can't compare
+        #     raise DSLValueError("Split-median not equal")
+    return elements[middle]
+
 # TODO: sympy.Abs returns a UndefinedKind, they prehaps forgot to implement it
 
 class divides(sympy.Function): #VarargsFunction):

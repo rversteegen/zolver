@@ -67,7 +67,7 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
         # temp Dummy whch is replaced by subs by set_generator by a properly constructed symbol
         global dummy_idx
         dummy_idx += 1
-        sym = sympy.Dummy('dummy' + str(dummy_idx))
+        sym = sympy.Dummy('bound' + str(dummy_idx))
         dummy_name = sym.name
         self.local_dict[dummy_name] = sym
 
@@ -496,14 +496,17 @@ goal = min(n)
 """
 
     intext="""
-# a and b are positive integers
-a, b : Int
-a > 0
-b > 0
-# The sum of a and b is 30
-a + b == 30
-# The number of possible assignments to a and b
-goal = count([a, b])
+# Declare the unknown list s as a sequence of integers
+s : Seq(Int, len = 5)
+# The median of s is 9
+median(s) == 9
+# The average of s is 10
+average(s) == 10
+# There is only one 8 in s
+count(x == 8 for x in s) == 1
+# The largest possible integer that could appear in s is the maximum of all possible assignments to s
+goal = max(s)
+
 """
 
     workspace = load_dsl(intext)

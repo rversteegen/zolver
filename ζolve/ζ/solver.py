@@ -63,8 +63,8 @@ class Workspace:
 
     def ζ3_solve(self):
         "Returns solved, unsat, notunique or unknown"
+        sol = ζ.ζ3.Z3Solver(goal = self.goal)
         try:
-            sol = ζ.ζ3.Z3Solver(goal = self.goal)
             # Not needed
             # for varname, var in variables.items():
             #     sol.add_variable(var)

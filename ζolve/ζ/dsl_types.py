@@ -15,6 +15,8 @@ class DSLError(Exception):
         self.lineno = lineno
         super().__init__(msg)
 
+class DSLValueError(DSLError):
+    "Calculations resulted in an error"
 
 ################################################################################
 ### Variable Type tags
@@ -40,29 +42,33 @@ Sym = sympy.Symbol
 
 
 class TypeClass:
-    pass
+    is_Seq = False
 
-# Type name, not an Seq object, which is a SeqConstructor
-class Seq(TypeClass):
     def __init__(self, element_type = Real, len = None, limit = None, **unknown):
         "This function is a callable Type tag"
         if limit is not None:   # obsolete name
             len = limit
         if unknown:
-            print(f"WARN: unknown args: Seq({unknown})")
+            print(f"WARN: unknown args: {self}({unknown})")
         self.element_type = element_type
         self.length = len
 
-    def makeSym(self, name):
-        ret = SeqSymbol(name)
-        # TODO: allow recursive element_types Seq(Seq(...))
-        ret.element_type = self.element_type
-        ret.length = self.length
-        return ret
+    def __str__(self):
+        return f"Type:{self.__class__.__name__}({self.element_type}, len={self.length})"
 
-# Type name, not an Set object, which is a SetObject
-def Set(element_type = Real):
-    pass
+# Type name, not an Seq object, which is a SeqConstructor
+class Seq(TypeClass):
+    is_Seq = True
+
+    def make_sym(self, name):
+        # TODO: allow recursive element_types Seq(Seq(...))
+        return make_seq_symbol(name, self.element_type, self.length)
+
+# Type name, not an Seq object, which is a SeqConstructor
+class Set(TypeClass):
+    def make_sym(self, name):
+        # TODO: allow recursive element_types Seq(Seq(...))
+        return make_set_symbol(name, self.element_type, self.length)
     
 
 
@@ -106,25 +112,22 @@ def Set(element_type = Real):
 
     #class SeqSymbol(SeqBase):
 
-class ζSeqExpr(SeqExpr):
-    "An expression (aside from a seq symbol) for an unknown finite or infinite sequence"
-    kind = SeqKind
-    length = None  # Replaces length property
 
-    def __new__(cls, element_type = "Real", length = None):
-        ret = Basic.__new__(cls)
-        ret.element_type = element_type  # compare to Set.element_kind
-        ret.length = length
-        return ret
+# class ζSeqSymbol(sympy.Symbol):
 
+# class ζSeqExpr(SeqExpr):
+#     "An expression (aside from a seq symbol) for an unknown finite or infinite sequence"
+#     kind = SeqKind
+#     length = None  # Replaces length property
 
-class ζSeqSymbol(sympy.Symbol):
-
-    kind = SeqKind
-    var_type = None  # a Seq() object
+#     def __new__(cls, element_type = "Real", length = None):
+#         ret = sympy.Basic.__new__(cls)
+#         ret.element_type = element_type  # compare to Set.element_kind
+#         ret.length = length
+#         return ret
 
 
-SeqSymbol = ζSeqExpr
+#SeqSymbol = ζSeqExpr
 #SeqSymbol = sympy.IndexedBase
 
 
@@ -149,18 +152,26 @@ def get_type_iterator(sym, constraints):
 class SetObject(sympy.Set):  #sympy.Basic):
     "An unknown finite or infinite sequence"
 
+    tempvar_ctr = 1
+    tempvar_id = None
+
     evaluated = None  # False if couldn't eval
     length = None  # Maybe a symbol, int, or oo. None if unknown. TODO: allow Expr
     is_Seq = False
+    element_vars = None  # New variables for the elements
+
+    partial_elements: dict = None  # If we know some elements, put here
 
     # For generators:
     expr = None
     syms = None
     constraints = None
 
-    # def __init__(self, *fakeargs):
-    #     "No args allowed. Constructed by set_generator"
-    #     super().__init__(*fakeargs)
+    def __new__(cls, *args):
+        ret = super().__new__(cls, *args)
+        ret.tempvar_id = SetObject.tempvar_ctr
+        SetObject.tempvar_ctr += 1
+        return ret
 
     def __repr__(self):
         return self.__str__()
@@ -174,7 +185,16 @@ class SetObject(sympy.Set):  #sympy.Basic):
         else:
             return f"{name}Object(...)"
 
-    def try_eval(self):
+    def try_eval(self, tryagain = False):
+        "Returns success"
+        if self.evaluated is False and not tryagain:
+            return False
+        if self.evaluated is not None:
+            return True
+
+        if self.expr is None:
+            return False
+
         func = sympy.lambdify(self.syms, self.expr)
         iterators = []
 
@@ -188,16 +208,45 @@ class SetObject(sympy.Set):  #sympy.Basic):
 
         #self.evaluated = result
 
+
+    def inst_element_list(self):
+        """Get a finite list of elements, creating new symbols as neededs.
+        Return (elements, are_vars)"""
+        if self.try_eval():
+            return self.evaluated, False
+        if self.element_vars is not None:
+            return self.element_vars, True
+        if self.length is None:
+            return None, False  # Can't
+
+        # Create individual vars
+        print(self, "going to instaniate elmeents. eltype = ", self.element_type)
+
+        varname = "element_" + str(self.tempvar_id) + "_"
+        self.element_vars = []
+        for idx in range(self.length):
+            try:
+                elmt = self.partial_elements[idx]
+            except:
+                # partial_elements is None or missing the element
+                elmt = declarevar(varname + str(idx), self.element_type)
+            self.element_vars.append(elmt)
+
+        self.partial_elements = None
+
+        if self.is_Seq == False:
+            # Put the elements in order. More efficient anyway
+            for idx in range(self.length - 1):
+                dsl.constraint(self.element_vars[idx] <= self.element_vars[idx + 1])
+        return self.element_vars, True
+
     # Basic.count() is for counting subexprs
     # Set.measure() is for the measure of intervals/etc
     # Python disallowes __len__ to return a non-int
     def len(self):
         if self.length is not None:
             return self.length
-        if self.evaluated is None:
-            self.try_eval()
-
-        if self.evaluated not in (None, False):
+        if self.try_eval():
             self.length = len(self.evaluated)
             return self.length
         return None
@@ -216,9 +265,49 @@ class SetObject(sympy.Set):  #sympy.Basic):
             return obj in self.evaluated  # OK if the objects are sympified
         return None
 
+    def __getitem__(self, idx):
+        raise DSLError("Can't index a set")
+
+    def __call__(self, idx):
+        "I said seqs and functions are interchangeable..."
+        return self.__getitem__(idx)
+
 class SeqObject(SetObject):
     "Slightly specialised"
     is_Seq = True
+    kind = SeqKind
+
+    def __getitem__(self, idx):
+        if self.length is None:
+            if idx < 0:
+                raise DSLError("Can't index seq of unknown len from the end")
+        else:
+            if idx < 0:
+                idx += self.length
+            if idx < 0 or idx >= self.length:
+                return sympy.Integer(0)   #FIXME: correct type
+
+        elements, are_vars = self.inst_element_list()
+        if elements is not None:
+            return elements[idx]
+
+        if self.partial_elements is None:
+            self.partial_elements = {}
+        else:
+            if idx in self.partial_elements:
+                return self.partial_elements[idx]
+
+        varname = "element_" + str(self.tempvar_id) + "_"
+        for idx in range(self.length):
+            if idx in self.partial_elements:
+                # Already done
+                elmt = self.partial_elements[idx]
+            else:
+                elmt = declarevar(varname + str(idx), self.element_type)
+
+        self.partial_elements[idx] = elmt
+        return elmt
+
 
 
 def finite_set_constructor(objects):
@@ -227,6 +316,21 @@ def finite_set_constructor(objects):
     obj.evaluated = objects
     obj._args = [objects]
     return obj
+
+def make_set_symbol(name, element_type = None, length = None):
+    fakeargs = sympy.Dummy(name)
+    obj = SetObject(fakeargs)
+    obj.element_type = element_type
+    obj.length = length
+    return obj
+
+def make_seq_symbol(name, element_type = None, length = None):
+    fakeargs = sympy.Dummy(name)
+    obj = SeqObject(fakeargs)
+    obj.element_type = element_type
+    obj.length = length
+    return obj
+
 
 def set_generator(expr, vars, make_seq, *constraints):
     print("SETCONSTR", expr, vars, constraints)
@@ -254,11 +358,12 @@ def set_generator(expr, vars, make_seq, *constraints):
         constraints = [cons.xreplace({dummy : sym}) for cons in constraints]
 
     #print("expr now", expr)
+    obj.element_type = get_type_of_expr(expr)
+    #obj.element_kind = 
     obj.expr = expr
     obj.syms = syms
     obj.constraints = constraints
 
-    print("syms", syms)
     return obj
 
 
@@ -271,6 +376,23 @@ class ζBoolSymbol(sympy.Symbol):
 class ζObjectSymbol(sympy.Symbol):
     "A variable with some object type like sympy.Point"
     kind = UndefinedKind
+
+def get_type_of_expr(expr : sympy.Expr):
+    if hasattr(expr, 'var_type'):
+        return expr.var_type
+
+    # argh, no working is_boolean
+    if isinstance(expr, sympy.core.relational.Relational):
+        return Int
+    if expr.is_integer:
+        return Int
+    elif expr.is_rational:
+        return Rational # == Real
+    elif not expr.is_real:
+        if expr.is_complex:
+            return Complex
+        raise NotImplementedError(f"Variable {expr} has unknown domain {expr.assumptions0}")
+    raise NotImplementedError(f"Variable {expr} has unknown domain {expr.var_type}")
 
 
 def getkind(expr):
@@ -364,7 +486,7 @@ def declarevar(name, Type):
         sym.kind = BooleanKind
     elif isinstance(Type, TypeClass):
         # Seq(), Set() types
-        sym = Type.makesym(name)
+        sym = Type.make_sym(name)
     elif type(Type) == type:
         # Something like Point, Line, Set
         sym = ζObjectSymbol(name)
