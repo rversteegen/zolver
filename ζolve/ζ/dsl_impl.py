@@ -140,7 +140,8 @@ def wrap_max(*args):
     args = args_or_iterable(args)
     if len(args) > 1 and all(isinstance(arg, Expr) for arg in args):
         return to_NumberKind(sympy.Max(*args))
-    return ζmax(*args_or_iterable(args))
+    return ζmax(*args)
+    #return ζmax(*args_or_iterable(args))
 
 max_types = (ζmax, sympy.Max)
 
@@ -195,14 +196,12 @@ def reify_collection(seq, sort = False):
             seq = sorted(seq)
         return seq
     elif isinstance(seq, SetObject):
-        elements, are_vars = seq.inst_element_list()
+        elements = seq.inst_element_list()
         if elements is None:
             raise NotImplementedError("Combination op on a set/seq with unknown length")
         if sort:
-            if are_vars and not seq.is_Seq:
-                # The vars are automatically sorted
-                pass
-            else:
+            # Set vars may be automatically sorted
+            if seq.elements_are_sorted == False:
                 try:
                     # Sympy maybe can
                     elements = sorted(elements)

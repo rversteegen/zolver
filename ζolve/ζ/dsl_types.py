@@ -5,7 +5,7 @@ from sympy.series.sequences import SeqExpr
 import sympy
 from sympy.core import BooleanKind, NumberKind, UndefinedKind
 from sympy.sets.sets import SetKind
-import ζ.dsl  # for _ctx context only
+from ζ import dsl  # for _ctx context only
 
 NotSymbolicKind = "NotSymbolicKind"
 SeqKind = "SeqKind"
@@ -158,11 +158,13 @@ class SetObject(sympy.Set):  #sympy.Basic):
     evaluated = None  # False if couldn't eval
     length = None  # Maybe a symbol, int, or oo. None if unknown. TODO: allow Expr
     is_Seq = False
-    element_vars = None  # New variables for the elements
+    #element_vars = None  # New variables for the elements
+    elements_are_sorted = False  # Contents of evaluated ascending
 
     partial_elements: dict = None  # If we know some elements, put here
+    _added_expr_constraints = False
 
-    # For generators:
+    # For generators: is a generate if has an expr
     expr = None
     syms = None
     constraints = None
@@ -171,6 +173,8 @@ class SetObject(sympy.Set):  #sympy.Basic):
         ret = super().__new__(cls, *args)
         ret.tempvar_id = SetObject.tempvar_ctr
         SetObject.tempvar_ctr += 1
+        ret.partial_elements = {}
+        ret.constraints = []
         return ret
 
     def __repr__(self):
@@ -186,7 +190,7 @@ class SetObject(sympy.Set):  #sympy.Basic):
             return f"{name}Object(...)"
 
     def try_eval(self, tryagain = False):
-        "Returns success"
+        "Returns True if self.evaluated is set."
         if self.evaluated is False and not tryagain:
             return False
         if self.evaluated is not None:
@@ -209,36 +213,61 @@ class SetObject(sympy.Set):  #sympy.Basic):
         #self.evaluated = result
 
 
-    def inst_element_list(self):
+    def inst_element_list(self, tryagain = False):
         """Get a finite list of elements, creating new symbols as neededs.
-        Return (elements, are_vars)"""
-        if self.try_eval():
-            return self.evaluated, False
-        if self.element_vars is not None:
-            return self.element_vars, True
+        Return elements or None"""
+        if self.try_eval(tryagain):
+            return self.evaluated
+        assert self.evaluated is None
+        # if self.element_vars is not None:
+        #     return self.element_vars,
         if self.length is None:
-            return None, False  # Can't
+            return None  # Can't
 
         # Create individual vars
         print(self, "going to instaniate elmeents. eltype = ", self.element_type)
 
         varname = "element_" + str(self.tempvar_id) + "_"
-        self.element_vars = []
+        element_vars = []
         for idx in range(self.length):
-            try:
+            if idx in self.partial_elements:
                 elmt = self.partial_elements[idx]
-            except:
+            else:
                 # partial_elements is None or missing the element
                 elmt = declarevar(varname + str(idx), self.element_type)
-            self.element_vars.append(elmt)
+                # Apply any constraints to each element. Need to rewrite bound vars!
+                self.add_constraints_for_generated_element(elmt)
 
-        self.partial_elements = None
+            element_vars.append(elmt)
+
+        self.partial_elements = {}  # No longer useful
 
         if self.is_Seq == False:
+            self.elements_are_sorted = True
             # Put the elements in order. More efficient anyway
             for idx in range(self.length - 1):
-                dsl.constraint(self.element_vars[idx] <= self.element_vars[idx + 1])
-        return self.element_vars, True
+                dsl.constraint(element_vars[idx] <= element_vars[idx + 1])
+        self.evaluated = element_vars
+        return self.evaluated
+
+    def add_constraints_for_generated_element(self, elmt):
+        # We have extra constraints on the elements
+        print(f"add_constraints_for_generated_element: {elmt}")
+        for cons in self.constraints:
+            print(f"add_constraints_for_generated_element: {elmt}, {cons}")
+            pass #dsl.constraint(cons)
+
+    def add_constraints_for_expression(self):
+        # Easy, since the bound variables are the same in expr, constraints, and
+        if self._added_expr_constraints: return
+        self._added_expr_constraints = True
+
+        for cons in self.constraints:
+            print(f"add_constraints_for_expression: {self.expr}, {cons}")
+            dsl.constraint(cons)
+        # Bound vars belong to their sets
+        for bvar in self.syms:
+            dsl.constraint(sympy.Contains(bvar, bvar.var_in_set, evaluate = False))
 
     # Basic.count() is for counting subexprs
     # Set.measure() is for the measure of intervals/etc
@@ -254,16 +283,14 @@ class SetObject(sympy.Set):  #sympy.Basic):
     def __contains__(self, obj):
         """Overrides Set.__contains__ which always returns true/false.
         We instead use 'in' to construct Contains objects."""
-        return sympy.Contains(obj, self)  # weird arg order
+        return sympy.Contains(obj, self, evaluate = False)
 
-    def _contains(self, obj):
-        """Called by Set.contains() (which is laso called from Contains() constructor),
-        do evaluation here or return None if unknown."""
-        if self.evaluated is None:
-            self.try_eval()
-        if self.evaluated not in (None, False):
-            return obj in self.evaluated  # OK if the objects are sympified
-        return None
+    # def _contains(self, obj):
+    #     """Called by Set.contains() (which is laso called from Contains() constructor),
+    #     do evaluation here or return None if unknown."""
+    #     if self.try_eval():
+    #         return obj in self.evaluated  # OK if the objects are sympified
+    #     return None
 
     def __getitem__(self, idx):
         raise DSLError("Can't index a set")
@@ -278,6 +305,8 @@ class SeqObject(SetObject):
     kind = SeqKind
 
     def __getitem__(self, idx):
+        "Get or make an element"
+#        print("Seq getitem", idx)
         if self.length is None:
             if idx < 0:
                 raise DSLError("Can't index seq of unknown len from the end")
@@ -287,15 +316,12 @@ class SeqObject(SetObject):
             if idx < 0 or idx >= self.length:
                 return sympy.Integer(0)   #FIXME: correct type
 
-        elements, are_vars = self.inst_element_list()
+        elements = self.inst_element_list()
         if elements is not None:
             return elements[idx]
 
-        if self.partial_elements is None:
-            self.partial_elements = {}
-        else:
-            if idx in self.partial_elements:
-                return self.partial_elements[idx]
+        if idx in self.partial_elements:
+            return self.partial_elements[idx]
 
         varname = "element_" + str(self.tempvar_id) + "_"
         for idx in range(self.length):
@@ -304,6 +330,7 @@ class SeqObject(SetObject):
                 elmt = self.partial_elements[idx]
             else:
                 elmt = declarevar(varname + str(idx), self.element_type)
+                self.add_constraints_for_generated_element(elmt)
 
         self.partial_elements[idx] = elmt
         return elmt
@@ -348,7 +375,7 @@ def set_generator(expr, vars, make_seq, *constraints):
             vtype = vset.element_type
         else:
             vtype = vset
-        dummy = ζ.dsl._ctx.locals[vname]
+        dummy = dsl._ctx.locals[vname]
         sym = declarevar(vname, vtype)
         # The symbol can inherit membership info directly
         sym.var_in_set = vset
@@ -424,7 +451,8 @@ def args_or_iterable(args):
     args = list(args)
     if len(args) == 1 and not isinstance(args[0], dict):
         try:
-            return list(args[0])
+            if not isinstance(args[0], SetObject):
+                return list(args[0])
         except:
             pass
     return args
@@ -462,7 +490,7 @@ def declarevar(name, Type):
 
     print(f"declaring {name} : {Type}")
 
-    _ctx = ζ.dsl._ctx
+    _ctx = dsl._ctx
 
     if name == 'I' and Type == Complex:
         return
@@ -477,7 +505,7 @@ def declarevar(name, Type):
         float: Real,
         sympy.Reals: Real,
         sympy.Complexes: Complex,
-        ζ.dsl.set: Set(Real),  # :/
+        dsl.set: Set(Real),  # :/
     }
     Type = rewrites.get(Type, Type)
 
@@ -521,6 +549,7 @@ def declarevar(name, Type):
 def constraint_hook(expr):
     """Called from constraint().
     Set these links up here so we can make use of them immediately to simplify while building the DSL"""
+    # Note, this will probably redundantly be called immediately when setting up an element.
     if isinstance(expr, sympy.Contains):
         sym = expr.args[0]
         theset = expr.args[1]

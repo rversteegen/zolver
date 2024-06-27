@@ -192,6 +192,20 @@ class SympyToZ3:
 
         #if isinstance
 
+    def Contains_to_z3(self, node : sympy.Contains):
+        elmt = self.to_z3(node.args[0])
+        setobj = node.args[1]
+        elements = setobj.inst_element_list(tryagain = True)  # calls try_eval()
+        if elements is not None:
+            #print(type(self.to_z3(elements[0])), type(elmt))
+            return Or([self.to_z3(el) == elmt for el in elements])
+            #print("ONEOF", oneof)
+            #self.solver.sol.add(Or(*oneof))
+        else:
+            # Need uninterpreted function.
+            raise NotImplementedError("containment in an unbounded set/seq")
+
+
     def ForAll_to_z3(self, node: dsl.ForAll):
         if len(node.args) != 1 or not isinstance(node.args[0], dsl.SetObject):
             assert False, "Bad ForAll args " + str(node.args)
@@ -285,9 +299,11 @@ class SympyToZ3:
                 # The first arg to AppliedPredicate is the predicate, get rid of that
                 args = args[1:]
 
-        # Specials which handle translation of their args themselves
+        # Specials which handle translation of their args themselves (because they take sets/seqs as args)
         elif isinstance(node, dsl.ForAll):
             return self.ForAll_to_z3(node)
+        elif isinstance(node, sympy.Contains):
+            return self.Contains_to_z3(node)
 
 
         if trans is None:
@@ -341,6 +357,7 @@ class Z3Solver():
 
     goal: ExprRef
     goal_func: str    # ''/min/max/count
+    finite_minmax = False  # Do min/max by finding all solns
     objective = None  # If not None, then using z3.Optimize()
     solved_by = ''    # Name of the strategy that worked
     solutions = None
@@ -351,6 +368,47 @@ class Z3Solver():
     first_print = True
     print_all_checks = True
 
+    def get_goal_for_minmax(self, goal, optname, minmax_of_values):
+        if len(goal.args) > 1:
+            # Asking for max of a finite set (may not need maximize()),
+            args = [self.trans.to_z3(arg) for arg in goal.args]
+            self.goal = max_of_values(args)
+        elif isinstance(goal.args[0], dsl.SetObject):   # And SeqObject
+            # Either asking for max of a finite set (may not need maximize()),
+            # or the max of set generator (translate to maximize())
+            setobj = goal.args[0]
+            # NOTE: this can add more constraints to the workspace for new variables
+            # which is ok since ζ3_solve() hasn't sent them to us yet.
+            # This deals with .partial_elements.
+            elements = setobj.inst_element_list(tryagain = True)  # calls try_eval()
+            if elements is not None:
+                # Each individual element has its type processed into constraints
+                print("got elements", elements)
+                elements = [self.trans.to_z3(arg) for arg in elements]
+                if setobj.elements_are_sorted:  # yay
+                    if optname == 'max':
+                        self.goal = elements[-1]
+                    else:
+                        self.goal = elements[0]
+                else:
+                    self.goal = max_of_values(elements)
+            else:
+                if setobj.partial_elements:
+                    print("WARNING!!! Ignoring partial_elements!")
+                # generator?
+                if setobj.expr is None:
+                    # TODO! Just find solutions and calc max
+                    raise NotImplementedError("Can't take {optfunc} of an undefined set/seq")
+                    self.finite_minmax = True
+                else:
+                    self.goal = self.trans.to_z3(setobj.expr)
+                    # Subject to the constraints
+                    setobj.add_constraints_for_expression()
+
+        else:
+            # Max of another expression
+            self.goal = self.trans.to_z3(goal.args[0])
+
     def __init__(self, goal):
         self.solutions = set()
 
@@ -358,20 +416,12 @@ class Z3Solver():
         print("goal is", repr(goal))
         if isinstance(goal, dsl.max_types):  # in fact type(dsl.max(...)) == dsl.max !
             self.goal_func = 'max'
-            if len(goal.args) > 1:
-                args = [self.trans.to_z3(arg) for arg in goal.args]
-                self.goal = max_of_values(args)
-            else:
-                self.goal = self.trans.to_z3(goal.args[0])
+            self.get_goal_for_minmax(goal, 'max', max_of_values)
             self.sol = Optimize()
             self.objective = self.sol.maximize(self.goal)
         elif isinstance(goal, dsl.min_types):
             self.goal_func = 'min'
-            if len(goal.args) > 1:
-                args = [self.trans.to_z3(arg) for arg in goal.args]
-                self.goal = min_of_values(args)
-            else:
-                self.goal = self.trans.to_z3(goal.args[0])
+            self.get_goal_for_minmax(goal, 'min', min_of_values)
             self.sol = Optimize()
             self.objective = self.sol.minimize(self.goal)
         else:
@@ -416,7 +466,7 @@ class Z3Solver():
         If blockit, blocks the solution.
         """
         if v:
-            print("z3 solver =", self.sol)
+            print("z3 solver =\n", self.sol)
         if not self.solutions:
             # On the first run, try everything
             result = self.solve_strategies()
@@ -520,8 +570,8 @@ class Z3Solver():
             else:
                 print("ζ3.solve() Warning: can't reach the inf/sup value")
             soln = b
-        if self.objective.lower_values() != self.objective.upper_values():
-            print("ζ3.solve() Warning: found range for objective")
+        if list(self.objective.lower_values()) != list(self.objective.upper_values()):
+            print("ζ3.solve() Warning: found range for objective:",  self.objective.lower_values(), self.objective.upper_values())
             #return unknown
 
         # m = self.sol.model()

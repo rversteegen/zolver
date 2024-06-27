@@ -64,12 +64,17 @@ class Workspace:
     def ζ3_solve(self):
         "Returns solved, unsat, notunique or unknown"
         sol = ζ.ζ3.Z3Solver(goal = self.goal)
+        # NOTE: in processing the goal, more constraints can be added to self,
+        # which is ok since haven't been added to sol yet.
         try:
             # Not needed
             # for varname, var in variables.items():
             #     sol.add_variable(var)
             for fact in self.facts:
-                sol.add_constraint(fact)
+                try:
+                    sol.add_constraint(fact)
+                except NotImplementedError as e:
+                    print(f"IGNORING MISSING CONSTRAINT {fact}:", e)
             ret = sol.solve()
             if ret is not unknown:
                 print("resolved by ζ3:" + sol.solved_by)
