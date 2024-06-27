@@ -18,10 +18,6 @@ from ζ.dsl_impl import *
 _ctx = None  # Workspace()
 
 
-def declarevar(name, Type):
-    "The parser translates type annotations into declarevar calls."
-    return ctx_declarevar(_ctx, name, Type)
-
 # Obsolete
 def variable(name, **constraints):
     sym = sympy.Symbol(name, **constraints)
@@ -43,6 +39,8 @@ def constraint(*exprs):
         print(f":constraint({expr})")
         assert_boolean_kind(expr, "Constraint")
         _ctx.facts.append(expr)
+        # Special case logic
+        constraint_hook(expr)
     #return exprs
 
 def goal(expr):
@@ -65,9 +63,6 @@ Element = sympy.Function('ζelement')
 #count = ζcount
 
 set = sympy.Function('ζset')
-
-def SetConstructor(*args):
-    return ζSetConstructor(_ctx, *args)
 
 #  Count, Set, Max, Min.
 

@@ -36,7 +36,6 @@ class Workspace:
         print("GOAL=",self.goal)
         dsl.assert_number_kind(self.goal, "The goal")
 
-
     def solve_for_AIMO(self):
         ret = self.solve()
 
@@ -64,22 +63,26 @@ class Workspace:
 
     def ζ3_solve(self):
         "Returns solved, unsat, notunique or unknown"
-        sol = ζ.ζ3.Z3Solver(goal = self.goal)
-        # Not needed
-        # for varname, var in variables.items():
-        #     sol.add_variable(var)
-        for fact in self.facts:
-            sol.add_constraint(fact)
-        ret = sol.solve()
-        if ret is not unknown:
-            print("resolved by ζ3:" + sol.solved_by)
-        if ret is solved:
-            self.solution = sol.solutions.pop()
-        if AIMO:
-            if not sol.solution_attained():
-                # min/max result is infinity or an inf/sup of an open interval
-                return unsat
-        return ret
+        try:
+            sol = ζ.ζ3.Z3Solver(goal = self.goal)
+            # Not needed
+            # for varname, var in variables.items():
+            #     sol.add_variable(var)
+            for fact in self.facts:
+                sol.add_constraint(fact)
+            ret = sol.solve()
+            if ret is not unknown:
+                print("resolved by ζ3:" + sol.solved_by)
+            if ret is solved:
+                self.solution = sol.solutions.pop()
+            if AIMO:
+                if not sol.solution_attained():
+                    # min/max result is infinity or an inf/sup of an open interval
+                    return unsat
+            return ret
+        finally:
+            # Break ref loops
+            sol.delete()
 
     def sympy_solve(self):
         pass

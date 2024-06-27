@@ -1,4 +1,4 @@
-x : int
-#ForAll(x, True, True)
-goal=0
-expected_answer =0
+n : int
+ForAll(x == n for x in Int)
+goal = n
+expected_answer = 'unsat'

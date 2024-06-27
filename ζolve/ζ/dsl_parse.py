@@ -39,8 +39,13 @@ def makeCall(name, args = [], keywords = [], copyloc = None):
         ret = ast.copy_location(ret, copyloc)
     return ast.fix_missing_locations(ret)
 
+dummy_idx = 0
 
 class ASTTransform(sympy.parsing.ast_parser.Transform):
+
+    # def __init__(self, *args):
+    #     self.bound_vars = {}  # name -> name of replacement symbol
+        #super.__init__(self, *args)
 
     # def visit_Constant(self, node):
     #     print("-=-------- CONST", ast.dump(node))
@@ -54,37 +59,69 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
     #                 args=[node], keywords=[]))
     #     return node
 
-    def visit_comprehension(self, node, ty):
+    def bind_variable(self, name):
+        if name in self.bound_vars:
+            # Is supported (untested), but probably bad code
+            #print("WARNING: " + name + " is used in nested comprehensions or twice, not supported")
+            raise DSLError(name + " is used in nested comprehensions or twice, not supported")
+        # temp Dummy whch is replaced by subs by set_generator by a properly constructed symbol
+        sym = sympy.Dummy()
+        dummy_name = sym.name
+        self.local_dict[dummy_name] = sym
+
+        # global dummy_idx
+        # dummy_idx += 1
+        # dummy_name = "dummy_" + str(dummy_idx)
+        # #self.local_dict[sym.name] = 
+        # #sym = self.local_dict['declarevar'](dummy_name, Type)
+        # self.local_dict['declarevar'](dummy_name, Type)
+        self.bound_vars[name] = dummy_name #sym
+        return dummy_name
+
+    def visit_comprehension(self, node, make_seq = False):
+        # elt: the expression
+        # -> set_generator(elt, var_names_types_dict, make_seq, constraints)
         args = [node.elt]
-        varnames = []  # strings
+        #varnames = []  # strings
         vars = []  # nodes
         vartypes = []  # nodes
         ifs = []
+        old_bindings = dict(self.bound_vars)  # support nesting
+
         for gen in node.generators:
-            varnames.append(gen.target.id)
-            vars.append(ast.Constant(gen.target.id))
-            # the thing being iterated. Already a node
+            varname = self.bind_variable(gen.target.id)
+            #varnames.append(varname)
+            vars.append(ast.Constant(varname))
+            # The thing being iterated. Already a node
             vartypes.append(gen.iter)
             ifs += gen.ifs
 
         args.append(ast.Dict(vars, vartypes))
+        args.append(ast.Constant(make_seq))
         args += ifs
-        ret = makeCall('SetConstructor', args, copyloc=node)
-        print("MAKE SET:\n", ast.dump(ret, indent=4))
-        return  self.generic_visit(ret)
+        ret = makeCall('set_generator', args, copyloc=node)
+        #print("MAKE SET:\n", ast.dump(ret, indent=4))
+        # Recurse with bindings
+        ret = self.generic_visit(ret)
+        self.bound_vars = old_bindings
+        return ast.fix_missing_locations(ret)
 
     def visit_ListComp(self, node):
-        return self.visit_comprehension(node, 'seq')
+        return self.visit_comprehension(node, True)
 
     def visit_SetComp(self, node):
-        return self.visit_comprehension(node, 'set')
+        return self.visit_comprehension(node)
 
     def visit_GeneratorExp(self, node):
-        return self.visit_comprehension(node, 'set')
+        return self.visit_comprehension(node)
 
     def visit_Name(self, node):
         "Modified version of Transform.visit_Name to remove auto-Symbol'ing"
-        if node.id in self.local_dict:
+
+        # TODO: allow nesting to shadow outer bound variables
+        if node.id in self.bound_vars:
+            return ast.Name(self.bound_vars[node.id], ast.Load())
+        elif node.id in self.local_dict:
             return node
         elif node.id in self.global_dict:
             name_obj = self.global_dict[node.id]
@@ -144,7 +181,7 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
 
     def visit_AnnAssign(self, node):
         """Convert 'x : Y' to 'variable("x", Y)' so we can record the variable name. Y can be any expression."""
-        # TODO: Consider allowing "f(x) : Int" -> "f : Function([x.var_type], Int)"
+        # TODO: Consider allowing "f(x) : Int" -> "f : Function((x.var_type), Int)"
         # TODO: Also "a[1] : Int = 1", declare a sequence if doesn't exist and add constraint
         if not isinstance(node.target, ast.Name):
             raise DSLError("Only naked variable names can be type annotated,  Found: " + ast.unparse(node.target), self.lineno)
@@ -169,6 +206,8 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
 
     lineno should be 0-based!
     """
+    include_attributes = False
+
     try:
         # Try to parse as an expression first, then a statement
         try:
@@ -181,7 +220,7 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
                 raise
         #print("ast.parse: used mode", mode)
         if AST_DEBUG:
-            print(f"ast.parse(mode={mode}) result: ", ast.dump(a, indent=4, include_attributes = True))
+            print(f"ast.parse(mode={mode}) result: ", ast.dump(a, indent=4, include_attributes =include_attributes))
     except SyntaxError as e:
         #raise sympy.SympifyError("Cannot parse %s." % repr(string))
         e.lineno = None  # It's garbage, and would end up in the printed message
@@ -190,10 +229,11 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
         ex.lineno = lineno
         raise ex
     transformer = ASTTransform(local_dict, global_dict)
+    transformer.bound_vars = {}  # name -> name of replacement symbol
     transformer.lineno = lineno
     a = transformer.visit(a)
     if AST_DEBUG:
-        print("REWRITTEN:\n", ast.dump(a, indent=4, include_attributes = True))
+        print("REWRITTEN:\n", ast.dump(a, indent=4, include_attributes = include_attributes))
     try:
         e = compile(a, "<string>", mode)
         with ζ.util.time_limit(SECONDS_LIMIT):

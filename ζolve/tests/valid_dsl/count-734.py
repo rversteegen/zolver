@@ -9,4 +9,6 @@ b > 0
 # The equation a + b = 30 is given
 a + b == 30
 # The number of possible solutions is the number of positive integer pairs (a, b) that satisfy the equation
-goal = count((a, b) for a in Int for b in Int if a > 0 and b > 0 and a + b == 30)
+#goal = count((a, b) for a in Int for b in Int if a > 0 and b > 0 and a + b == 30)
+goal = count(a + b for a in Int for b in Int if a > 0 and b > 0 and a + b == 30)
+expected_answer =1

@@ -5,15 +5,19 @@ import ζ.dsl_parse
 import ζ.util
 import ζ.solver
 
+rootdir = "/mnt/common/proj/kaggle/AIMO/ζolve/"
+
 testfiles =[]
-for dirpath, dirnames, filenames in os.walk('tests'):
+for dirpath, dirnames, filenames in os.walk(rootdir + 'tests'):
     for fname in filenames:
         if fname.endswith('.py'):
             testfiles.append(os.path.join(dirpath, fname))
 
 testfiles = [
     #"examples/AIMO_example4.py"
-    "tests/valid_dsl/count-734.py"
+    # "tests/valid_dsl/count-734.py"
+    # "tests/valid_dsl/count-simple.py"
+    "tests/valid_dsl/forall.py"
 ]
 
 
@@ -21,7 +25,7 @@ failures = ""
 
 for testfile in testfiles:
     print("\n######################################## Testing", testfile)
-    workspace = ζ.dsl_parse.load_dsl_file(testfile, verbose = True)#False)
+    workspace = ζ.dsl_parse.load_dsl_file(rootdir + testfile, verbose = True)#False)
     ret = workspace.solve()
     if ret == ζ.solver.solved:
         ans = workspace.solution

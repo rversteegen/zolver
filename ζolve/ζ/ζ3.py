@@ -4,7 +4,7 @@ from typing import Union as tyUnion
 
 from z3 import *
 import sympy
-from ζ import dsl
+from ζ import dsl, dsl_types
 
 # Alternative to sat/unsat/unknown
 solved = "solved"
@@ -82,8 +82,9 @@ def num_to_py(ref: ArithRef):
 
 
 class SympyToZ3:
-    def __init__(self):
+    def __init__(self, solver):
         self.varmap = {}
+        self.solver = solver
 
         # Initialised here so we can use bound methods
         self.z3translations = {
@@ -124,6 +125,17 @@ class SympyToZ3:
         q = FreshConst(IntSort())
         return And(arg > 1, Not(Exists([p, q], And(p > 1, q > 1, p * q == arg))))
 
+    def dsl_Type_to_sort(self, Type):
+        if Type == dsl.Bool:
+            return BoolSort()
+        elif Type == dsl.Int:
+            return IntSort()
+        elif Type == dsl.Real:
+            return RealSort()
+        elif Type == dsl.Complex:
+            raise NotImplementedError("Complex z3 Sort needed")
+        else:
+            raise ValueError("Sort for misc Type " + str(Type))
 
     def symbol_to_z3(self, sym: tyUnion[sympy.Symbol, sympy.Idx]) -> AstRef:
         # Both sympy and z3 allow multiple variables of the same name.
@@ -138,23 +150,27 @@ class SympyToZ3:
         if sym in self.varmap:
             return self.varmap[sym]
 
+        assert not isinstance(sym, sympy.Dummy), "Dummy!!!"
+
         #print(f"symbol {sym} assump:: {sym.assumptions0}")
         assert sym.is_symbol, "Expected a symbol (declared unknown), got " + str(sym)    # Not is_Symbol; a Idx isn't
         #assert sym.kind == sympy.core.NumberKind
         #dsl.assert_number_kind(sym, "Variable " + str(sym))
 
-        if sym.var_type == 'Bool':  # Custom prop
+        # FIXME: Symbol properties are ignores, therefore we translate Nat and Real the same!
+
+        if sym.var_type == dsl.Bool:
             z3var = Bool(sym.name)
-        elif sym.is_integer:
+        elif sym.var_type == dsl.Int or sym.is_integer:
             z3var = Int(sym.name)
-        elif sym.is_rational:
+        elif sym.is_rational:  # ...sym.var_type == dsl.Rat which is dsl.Real
             # Note Z3 doesn't have a RatSort, rationals are RealSort.
             z3var = Real(sym.name)
             # TODO, add rational constraint? Probably hardly matters
-        elif not sym.is_real:
+        elif sym.var_type == dsl.Complex or not sym.is_real:
             assert sym.is_complex, f"Variable {sym} has unknown domain"
             raise NotImplementedError("Complex variable")
-        else:
+        else:  # dsl.Real
             # Assume real, but sympy doesn't assume a plain Symbol() is real
             z3var = Real(sym.name)
 
@@ -169,6 +185,43 @@ class SympyToZ3:
             raise NotImplementedError("Nonconstant exponents")
 
         #if isinstance
+
+    def ForAll_to_z3(self, node: dsl.ForAll):
+        ret = ForAll()
+        return ret
+
+
+    def set_to_function(self, setobj: dsl.SetObject):
+        sol = self.solver.sol
+        domainsort = self.dsl_Type_to_sort(setobj.element_type)
+        func = FreshFunction([domainsort], BoolSort())
+        # Add constraints
+        # General sets with generators: S = {expr(vars) : vars ∈ T Λ p(vars)}
+        #  ∀ z : (z ∈ S) == (∃vars : p(vars) Λ expr(vars) == z)
+        # Maybe helpful to split out one direction:
+        #  ∀ vars : p(vars) => (expr(vars) ∈ S)
+
+        # For a simple constructor {x : x ∈ S Λ p(x)} instead translate as
+        #  ∀ x : (x ∈ S) == p(x)
+
+
+        if setobj.constraints is not None:
+            if isinstance(setobj.expr, sympy.Symbol):
+                sym = setobj.expr
+                print("set_to_function simple with symbol " + sym)
+
+                # ForAll
+                # Equivalent
+
+            else:
+                raise NotImplementedError("Tricky general set")
+                for cons in setobj.constraints:
+
+                    # Replace the symbols
+                    bound_expr = cons.xreplace()###
+                    # FIXME: inside a ForAll need to 
+                    #sol.add(Implies
+        return func
 
     def to_z3(self, node: sympy.Basic) -> AstRef:
         if isinstance(node, sympy.Symbol):
@@ -259,7 +312,7 @@ class Z3Solver():
     def __init__(self, goal):
         self.solutions = set()
 
-        self.trans = SympyToZ3()
+        self.trans = SympyToZ3(self)
         print("goal is", repr(goal))
         if isinstance(goal, dsl.max_types):  # in fact type(dsl.max(...)) == dsl.max !
             self.goal_func = 'max'
@@ -288,6 +341,8 @@ class Z3Solver():
                 assert isinstance(goal.args[0], sympy.Basic)
                 goal = goal.args[0]
                 self.goal_func = 'count'
+                # If counting a Seq/Set, translate it
+
 
             self.sol = Solver()
             self.sol.set('randomize', False)  # for nlsat
@@ -296,12 +351,19 @@ class Z3Solver():
             self.goal = self.trans.to_z3(goal)
         #self.sol.set('timeout', 3000)  # ms
 
+    def delete(self):
+        " Break ref loops"
+        del self.trans.solver
+        del self.trans
+        del self.sol
+
     def set_goal(self, spexp: sympy.Expr):
         #if spexp.func == 
         pass
 
     def add_variable(self, spvar: sympy.Symbol):
-        self.trans.symbol_to_z3(spvar)
+        #self.trans.symbol_to_z3(spvar)
+        pass
 
     def add_constraint(self, spexp: sympy.Expr):
         self.sol.add(self.trans.to_z3(spexp))

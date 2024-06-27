@@ -66,7 +66,7 @@ Sequences, lists, and functions with integer domain (one arg of type Int) are th
 • x is a length n unknown sequence of integers, x_0, x_1, …, x_{n-1}  → x : Seq(Int, len = n)
 • the sequence of integers 4, …, 6 → range(4, 7)
 [BLOCK] seqs relations or comb
-• {x_i} is a sequence of integers for i ∈ 1, …, 32 → x : Seq(Real, start = 1, len = 32)
+[BLOCK]• {x_i} is an unknown sequence of numbers for i ∈ 1, …, 32 → x : Seq(Real, start = 1, len = 32)
 • the sequence of integers 0, …, 9 → seq(0, 9)
 • list/sequence of two values x, y → [x, y]
 • last element of list s → s[-1]

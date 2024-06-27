@@ -80,8 +80,13 @@ class BoolReturningFunction(sympy.core.function.Application, sympy.logic.boolalg
 
 
 class ForAll(BoolReturningFunction):
-    def __init__(cls, *args):
-        raise NotImplementedError("ForAll")
+    def __new__(cls, *args):
+        if len(args) != 1:
+            raise TypeError("ForAll should have one arg, got " + str(args))
+        if not isinstance(args[0], SetObject):
+            raise TypeError("ForAll argument should be a comprehension, got " + str(args[0]))
+        ret = super().__new__(cls, *args)
+
 
 def Exists(vars, *args):
     raise NotImplementedError("Exists")
@@ -155,14 +160,25 @@ class ζcount(sympy.Basic):
             arg = args[0]
             #print(f"got {arg}: {str(type(arg))}")
             if type(arg).__name__ == 'generator':
-                arg = list(arg)
+                assert False, "remaining generator!"
+                #arg = list(arg)
+
+            if isinstance(arg, SetObject):
+                # Maybe shortcut eval
+                length = arg.len()
+                print(f"count() ctor tried to eval {arg}, got {length}")
+                if length is not None:
+                    return Integer(length)
+
             if isinstance(arg, (list, tuple, set)):
                 # If all args are numbers, can eval
                 if all(is_a_constant(item) for item in arg):
-                    print(f"!Eval count({args}) to {len(arg)}!!")
+                    print(f"count() ctor eval constant list({args}) to {len(arg)}!!")
                     return Integer(len(arg))
-            raise DSLError("count() argument not understood: " + str(arg))
-        return Basic.__new__(cls, *args)
+            #raise DSLError("count() argument not understood: " + str(arg))
+            return Basic.__new__(cls, *args)
+        else:
+            raise DSLError("count() arguments not understood: " + str(args))
 
     def is_constant(self):
         return False
@@ -278,58 +294,5 @@ def wrap_sympy_solve(*args, **kwargs):
         print("dsl.solve: converted to constraint:", cons)
         ζ.dsl.constraint(cons) # dsl
     return symbol
-
-
-
-###############################################################################
-### Variable creation
-
-def ctx_declarevar(_ctx, name, Type):
-    """
-    The parser translates type annotations into declarevar calls.
-    The variable types would be available in __annotations__ anyway,
-    but we do some extra steps, declaring the variable."""
-
-    if name == 'I' and Type == Complex:
-        return
-    if Type == Expr:
-        return
-    if Type == Symbol:
-        Type = Real
-
-    rewrites = {
-        bool: Bool,
-        int: Int,
-        float: Real,
-    }
-    Type = rewrites.get(Type, Type)
-
-    if callable(Type):  # For Seq
-        sym = Type(name)
-    elif Type == Bool:
-        sym = ζSymbol(name)
-        sym.kind = BooleanKind
-    elif isinstance(Type, Set):
-        sym = ζSetSymbol(name)
-    elif isinstance(Type, Seq):
-        sym = ζSetSymbol(name)
-    else:
-        assert isinstance(Type, str), "Invalid type annotation: " + str(Type)
-        assumptions = {
-            # There is no sympy boolean assumption, nor a type for Boolean symbols?
-            # Actually, Symbol inherits from sympy.logic.boolalg.Boolean
-            "Bool": '',
-            "Int": 'integer',
-            "Real": 'real',
-            "Complex": 'complex',
-            "Nat": 'integer positive',
-            "Nat0": 'integer nonnegative'}
-        kwargs = {arg: True for arg in assumptions[Type].split()}
-        sym = ζSymbol(name, **kwargs)
-    sym.var_type = Type
-
-    _ctx.variables[name] = sym
-    _ctx.locals[name] = sym
-    return sym
 
 
