@@ -1,10 +1,16 @@
+
 import time
 from collections import defaultdict
-from ζ import dsl, dsl_parse, ζ3, solver
+import ζ.solver, ζ.dsl, ζ.dsl_parse, ζ.ζ3
+#from ζ import dsl, dsl_parse, ζ3
 
+################################################################################
+## Prompt and topic
+
+PROMPT_FILE = "/kaggle/input/zolver/ζolve/prompt.txt"  #temp
 
 def build_prompt(filename = "prompt.txt", sections = ['seqs', 'graphs', 'complex', 'ntheory'], startcode = '```', endcode = '```', maxlength = 10000):
-
+    print(sections)
     startanswer = "### CAS Translation\n" + startcode
 
     with open(filename) as pfile:
@@ -19,9 +25,7 @@ def build_prompt(filename = "prompt.txt", sections = ['seqs', 'graphs', 'complex
             including = not including
             continue
         if line.startswith('[BLOCK]'):
-            if len(selected) > maxlength:
-                print("build_prompt: Reached maxlength!!")
-                break
+
             keys = line.split(" ")[1:]
             if 'or' in keys:
                 keys.remove('or')
@@ -39,11 +43,15 @@ def build_prompt(filename = "prompt.txt", sections = ['seqs', 'graphs', 'complex
             lines.append(line)
         selected = '\n'.join(lines)
 
+    if len(selected) > maxlength:
+        print("build_prompt: Reached maxlength!!", len(selected), ">", maxlength)
+        sections.pop()
+        return build_prompt(filename, sections, startcode, endcode, maxlength)
+
     prompt = selected
     prompt = prompt.replace('STARTCODE', startcode).replace('ENDCODE', endcode).replace("STARTANSWER", startanswer)
     return prompt.rstrip() + "\n"
 
-#print(build_prompt("prompt.txt"))
 
 def topic_query(gen, problem):
     "gen is a fresh LLMGenerator"
@@ -155,15 +163,34 @@ geometry|Geometry:""".split("\n")
     return sections
 
 def choose_prompt(gen, problem, maxlength = 10000):
-
     topics = topic_query(gen, problem)
     if len(topics) == 0:
         # Very easy calculation problem
         pass #topics = ['seqs', 'graphs', 'ntheory']
 
-    prompt = build_prompt("/kaggle/input/zolver/ζolve/prompt.txt", topics, maxlength = maxlength)
+    prompt = build_prompt(PROMPT_FILE, topics, maxlength = maxlength)
     return prompt.replace('PROBLEM', problem)
 
+################################################################################
+## LLM
+
+try:
+    from llm_util import run_llm
+except ImportError:
+
+    def run_llm(prompt, *args, numseqs = 1, **_kwargs):
+        print("seqs", numseqs)
+        return ["""
+x : Int
+constraint(is_prime(x))
+constraint(x >= 98)
+goal = min(x)"""] * numseqs
+
+    
+
+
+################################################################################
+## 
 
 class ScoreLog:
     def __init__(self):
@@ -196,86 +223,105 @@ class ζolver:
         self.best = 0
         self.multiprocessing = multiprocessing
 
-    def doit(self, makegen, timeout = 180, hard_timelimit = None):
+    def doit(self, model, tokenizer, makegen, timeout = 180, hard_timelimit = None):
         """
         Returns true if definitively solved, otherwise rsulsts in scorelog.
         hard_timelimit: timestamp must finish before
         """
         start_time = time.time()
+        if hard_timelimit is None:
+            hard_timelimit = start_time + 1e6
+
+        def time_left():
+            return min(start_time + timeout, hard_timelimit) - time.time()
 
         print("###STATEMENT\n" + self.problem + "\n")
 
         prompt = choose_prompt(makegen(), self.problem, self.maxlength)
 
-        temp = 0.3
-
-        REPEATS = 6
+        REPEATS = 2
 
         for repeat in range(REPEATS):
-            it_start = time.time()
-            if hard_timelimit and it_start > hard_timelimit:
-                return
-
-            time_left = min(start_time + timeout - it_start, hard_timelimit - time.time())
-            if time_left < 5:
+            print(repeat, "timeleft", time_left())
+            if time_left() < 30:
                 return
             # Give each repeat at least timeout/REPEATS time
             #time_for_item = min(time_left, timeout / max(1, REPEATS - repeat)
-            time_for_item = max(10, min(time_left,  30))
+            #time_for_item = max(10, min(time_left(),  30))
 
             try:
-                gen = makegen()
-                gen.append_prompt(prompt, show = False)
+                # gen = makegen()
+                # gen.append_prompt(prompt, show = False)
 
-                temp = max(0.9, 0.3 + repeat * 0.2)
-                gen.generate(temp, limit = 600, skip_check = True)
-                translation = gen.new_output
+                temp = max(0.9, 0.6 + repeat * 0.2)
+                # gen.generate(temp, limit = 600, skip_check = True)
+                # outputs = [gen.new_output]
 
+                outputs = run_llm(model, tokenizer, prompt, max_tokens = 640, numseqs = 3, temp = temp, stopwords = ["```"])
             except Exception as e:
                 # Could be a OOM
                 print("gen.generate() EXCEPTION")
                 print(e)
                 continue
 
-            try:
-                workspace = dsl_parse.load_dsl(translation, verbose = False)
-                print("PARSE SUCCESS")
-                workspace.print()
+            for translation in outputs:
+                print("-------Translation--------")
+                print(translation)
+                print("--------------------------")
 
-                res = workspace.solve()
-
-                print("---------ζOLVE RESULT")
-                print(f"Result {res}, answer {workspace.solution}")
-                #if res == solver.unknown orres == solver.unsat or res == solver.notunique:
-                if not solver.solved:
-                    print("No conclusion.")
-                    continue
-
-                score = 1
-                info = "ζolve"
-                if workspace.goal.is_constant:
-                    score = 0.6
-                    info = "ζolve-constant"
-                self.best, best_score, score_gap = self.scorelog.add_answer(solver.solution, score, info)
-                if (score_gap >= 2 or best_score >= 1.7): # and not VALIDATE:
-                    print("ζOLVE EARLY FINISH")
+                if time_left() < 5:
+                    return
+                if self.try_translation(translation):
                     return
                     #return True  # FIXME
 
-            except NotImplementedError as e:
-                print("-------ζOLVE FAILED: NotImplementedError")
-                print(e)
-                #stats.unimp += 1
-                #stats.solvefailed += 1
-            except (SyntaxError, dsl.DSLError, ζ3.MalformedError) as e:
-                print("-------ζOLVE FAILED")
-                print(e)
-                #stats.solvefailed += 1
-            except Exception as e:
-                # Could be a OOM
-                print("-------ζOLVE UNCAUGHT EXCEPTION")
-                print(e)
+    def try_translation(self, translation):
+        try:
+            workspace = ζ.dsl_parse.load_dsl(translation, verbose = False) # A ζ.solver.Workspace
+            print("PARSE SUCCESS")
+            workspace.print()
+
+            res = workspace.solve()
+
+            print("---------ζOLVE RESULT")
+            print(f"Result {res}, answer {workspace.solution}")
+            #if res == ζ.solver.unknown orres == ζ.solver.unsat or res == ζ.solver.notunique:
+            if res != ζ.solver.solved:
+                print("No conclusion.")
+                return
+
+            score = 1
+            info = "ζolve"
+            if ζ.dsl.is_a_constant(workspace.goal):
+                score = 0.6
+                info = "ζolve-constant"
+            self.best, best_score, score_gap = self.scorelog.add_answer(workspace.solution, score, info)
+            if (score_gap >= 5 or best_score >= 7): # and not VALIDATE:  ####FIXM
+                print("ζOLVE EARLY FINISH")
+                return True
+
+        except NotImplementedError as e:
+            print("-------ζOLVE FAILED: NotImplementedError")
+            print(e)
+            #stats.unimp += 1
+            #stats.solvefailed += 1
+        except (SyntaxError, ζ.dsl.DSLError, ζ.ζ3.MalformedError) as e:
+            print("-------ζOLVE FAILED")
+            print(e)
+            #stats.solvefailed += 1
+        except Exception as e:
+            # Could be a OOM
+            print("-------ζOLVE UNCAUGHT EXCEPTION")
+            print(e)
 
 
 if __name__ == '__main__':
-    ζol = ζolver("foo")
+    PROMPT_FILE = "prompt.txt"
+    ζol = ζolver("Solve THIS!")
+    class dummy_makegen:
+        new_output = " Yes"
+        def append_prompt(*args, **kwargs): pass
+        def generate(*args, **kwargs): pass
+
+    ζol.doit(None, None, dummy_makegen, 60)
+    print(ζol.scorelog.outputs, ζol.best)

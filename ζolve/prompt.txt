@@ -131,17 +131,20 @@ You can use standard sympy types and functions for geometry. The CAS extends the
 • p is an unknown point on the plane → p : Point   %% p has components p.x, p.y
 • S is an unknown polygon on the plane → P : Polygon
 • the polygon ABCD of points A, B, C, D → Polygon(A, B, C, D)  %% E.g. tri : Polygon ; tri = Polygon(base1, base2, peak)
-• a polygon P is regular → is_regular(P)
+[NOTE]• a polygon P is regular → is_regular(P)
 • a regular polygon with N sides, center C, radius R (from center to vertices) → RegularPolygon(c = C, r = R, n = N)  %% All three arguments are optional, and can be unknown variables
 • S is an unknown circle on the plane → S : Circle    %% S has components S.center, S.radius
 • the circle with center c and radius r → Circle(c, r)
 • the circle passing through 3 points → Circle(p1, p2, p3)
 • a unknown straight line or segment AB → AB : Line
-• the line between points A, B : Line(A, B)
+• the line between points A, B → Line(A, B)
+• the line with equation y = f(x) → Line(f(x))
+• the line through point (0, 0) with slope m → Line(Point(0, 0), slope = m)
 • distance between points p1, p2 → distance(p1, p2)
 • distance between the nearest points of two sets of points (individual Points or Lines, Circles, etc) → distance
 • angle between lines AB, BC → angle(AB, BC)
-• the set of all points on the perimeter of shape S → perimeter(P)
+• the length of the perimeter of shape S → S.perimeter
+[NOTE]• the set of all points on the perimeter of shape S → perimeter(P)
 
 Angles are measured in radians
 • 50 degrees → deg2rad(50)
