@@ -54,6 +54,7 @@ def goal(expr):
 # NOTE: forgot about this, been using Contains
 #Element = sympy.Function('ζelement')
 def Element(a, b):
+    #if not isinstance(b, SetObject) and not 
     #print(b, type(b), repr(b))
     ret = sympy.Contains(a, b, evaluate = False)
     # if isinstance(b, SetObject):
@@ -64,23 +65,38 @@ def Element(a, b):
 
 set = set_constructor
 
+
 max = wrap_max
 min = wrap_min
 
-# sympy.Product is always unevaluated, sympy.product simplifies to an expression or produces a Product
-#Product = sympy.product
-# But there's no similar sympy.sum!
+sum = summation
 
-def product(*args):
-    args = args_or_iterable(args)
-    return sympy.product(*args)
+range = range_seq
+seq = rangep1_seq
 
+total = sum
 
-#sum = VarargsFunction('Sum')
+π = pi
+Pi = pi
 
-def sum(*args):
-    args = args_or_iterable(args)
-    return Add(*args)
+def nPr(n, r):
+    return factorial(n)/factorial(n-r)
+
+def nCr(n, r):
+    return factorial(n)/factorial(n-r)/factorial(r)
+
+def permutations(a, b):
+    return nPr(a, b)
+
+def perm(a, b):
+    return nPr(a, b)
+
+def combinations(a, b):
+    return nCr(a, b)
+
+def comb(a, b):
+    return nCr(a, b)
+
 
 
 # sympy lcm/gcd are not symbolic

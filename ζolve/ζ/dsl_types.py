@@ -43,13 +43,14 @@ Sym = sympy.Symbol
 
 class TypeClass:
     is_Seq = False
+    element_type = None  # The range for Function
 
     def __init__(self, element_type = Real, len = None, limit = None, **unknown):
         "This function is a callable Type tag"
         if limit is not None:   # obsolete name
             len = limit
         if unknown:
-            print(f"WARN: unknown args: {self}({unknown})")
+            print(f"WARN: unknown args: {self.__class__.__name__}({unknown})")
         self.element_type = element_type
         self.length = len
 
@@ -69,7 +70,27 @@ class Set(TypeClass):
     def make_sym(self, name):
         # TODO: allow recursive element_types Seq(Seq(...))
         return make_set_symbol(name, self.element_type, self.length)
-    
+
+class Function(TypeClass):
+    arg_types = None
+
+    def __init__(self, arg_types, return_type = Real, len = None, **assumptions):
+        "This function is a callable Type tag"
+        if not isinstance(arg_types, (tuple, list)):
+            arg_types = (arg_types,)
+        self.arg_types = arg_types
+        self.element_type = return_type
+        self.assumptions = assumptions
+
+    def make_sym(self, name):
+        # TODO: allow recursive element_types Seq(Seq(...))
+        # The caller (declarevar) sets .var_type
+        # Creates an UndefinedFunction
+        return sympy.Function(name, **self.assumptions)
+
+    def __str__(self):
+        return f"Type:Function(({self.arg_types}),{self.element_type})"
+
 
 
 ################################################################################
@@ -223,13 +244,17 @@ class SetObject(sympy.Set):  #sympy.Basic):
         #     return self.element_vars,
         if self.length is None:
             return None  # Can't
+        self.length = sympy.simplify(self.length)
+        if not self.length.is_Integer:
+            return None
+        length = int(self.length)
 
         # Create individual vars
         print(self, "going to instaniate elmeents. eltype = ", self.element_type)
 
         varname = "element_" + str(self.tempvar_id) + "_"
         element_vars = []
-        for idx in range(self.length):
+        for idx in range(length):
             if idx in self.partial_elements:
                 elmt = self.partial_elements[idx]
             else:
@@ -245,7 +270,7 @@ class SetObject(sympy.Set):  #sympy.Basic):
         if self.is_Seq == False:
             self.elements_are_sorted = True
             # Put the elements in order. More efficient anyway
-            for idx in range(self.length - 1):
+            for idx in range(length - 1):
                 dsl.constraint(element_vars[idx] <= element_vars[idx + 1])
         self.evaluated = element_vars
         return self.evaluated
@@ -576,7 +601,7 @@ def declarevar(name, Type):
         sym = ζSymbol(name)  # ζBoolSymbol
         sym.kind = BooleanKind
     elif isinstance(Type, TypeClass):
-        # Seq(), Set() types
+        # Seq(), Set(), Function() types
         sym = Type.make_sym(name)
     elif type(Type) == type:
         # Something like Point, Line, Set
@@ -619,8 +644,9 @@ def constraint_hook(expr):
         sym = expr.args[0]
         theset = expr.args[1]
         if not(hasattr(sym, 'var_in_set')):
-            #print("WARNING: Contains but sym missing .var_in_set")
-            assert False, "Contains but sym missing .var_in_set"
+            # Something like "seqA in seqB"
+            print("WARNING: Contains but sym missing .var_in_set")
+            #assert False, "Contains but sym missing .var_in_set"
         else:
             if sym.var_in_set is not None and sym.var_in_set != theset:
                 # This is ok, it's in the intersection.
@@ -637,7 +663,7 @@ def add_element_of_constraint(elmt, set_or_Type):
     Type = set_or_Type
     # Actually, don't want to handle any others, basic types should already be set.
     if isinstance(Type, TypeClass):
-        # Seq(), Set() types. Nothing to do.
+        # Seq(), Set(), Function() types. Nothing to do.
         pass
     elif type(Type) == type:
         # Something like Point, Line, Set

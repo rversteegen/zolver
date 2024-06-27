@@ -124,7 +124,8 @@ Syntax lookup table:
 • least common multiple of x and y → lcm(x, y)
 • x! → factorial(x)
 • x is a prime number → is_prime(x)
-• number of combinations x choose y → comb(x, y)
+• number of permutations n choose r → perm(n, r)
+• number of combinations n choose r → comb(n, r)
 
 [BLOCK] geometry
 You can use standard sympy types and functions for geometry. The CAS extends these for solving for unknowns:

@@ -89,11 +89,9 @@ class ForAll(BoolReturningFunction):
 class Exists(BoolReturningFunction):
     def __new__(cls, *args):
         "First arg is exp, remaining are syms"
-        print("EXISTS",args)
         # if len(args) != 2 or not isinstance(args[0], list):
         #     raise TypeError("Exists takes 2 args")
-        ret = super().__new__(cls, *args)
-        return ret
+        return super().__new__(cls, *args)
 
 # sympy.minimum/maximum(f, symbol, domain=Reals) returns the min/max of a function or expression,
 # if the expression doesn't contain the symbol it's returned.
@@ -217,13 +215,33 @@ def reify_collection(seq, sort = False):
     else:
         assert False, "reify_collection strange arg: " + str(seq)
 
-def average(seq):
-    elements = reify_collection(seq)
+
+# sympy.Product is always unevaluated, sympy.product simplifies to an expression or produces a Product
+#Product = sympy.product
+# But there's no similar sympy.sum!
+
+def reify_collection_or_args(args):
+    if len(args) == 1 and isinstance(args[0], SetObject):
+        return reify_collection(args[0])
+    return args_or_iterable(args)
+
+def product(*args):
+    elements = reify_collection_or_args(args)
+    return sympy.product(*elements)
+
+def summation(*args):
+    # TODO: series sums
+    elements = reify_collection_or_args(args)
+    print("sum: got elmenets", elements)
+    return sympy.Add(*elements)
+
+def average(*args):
+    elements = reify_collection_or_args(args)
     print("average: got elmenets", elements)
     return sympy.Add(*elements) / len(elements)
 
 def median(seq):
-    elements = reify_collection(seq)
+    elements = reify_collection(seq, sort = True)
     # What if even??
     middle = len(elements) // 2
     if len(elements) % 2:
@@ -232,6 +250,29 @@ def median(seq):
         # if elements[middle] != elements[middle + 1]:   # Wait, can't compare
         #     raise DSLValueError("Split-median not equal")
     return elements[middle]
+
+
+def range_args(args):
+    start, step = 0, 1
+    if len(args) >= 2:
+        start = args.pop(0)
+    end = args.pop(0)
+    if args:
+        step = args.pop(0)
+    return start, end, step
+
+dummy_idx = 1
+
+def range_seq(*args):
+    start, end, step = range_args(list(args))
+    idx = declarevar('idx' + str(dummy_idx), Int)
+    gen = set_generator(start + idx * step, {idx.name: Int}, True, idx < (end - start))
+    gen.length = end - start
+    return gen
+
+def rangep1_seq(*args):
+    start, end, step = range_args(list(args))
+    return range(start, end + 1, step)
 
 # TODO: sympy.Abs returns a UndefinedKind, they prehaps forgot to implement it
 

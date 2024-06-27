@@ -85,6 +85,7 @@ class SympyToZ3:
     def __init__(self, solver):
         self.varmap = {}
         self.solver = solver
+        self.func_sorts = {}
 
         # Initialised here so we can use bound methods
         self.z3translations = {
@@ -335,6 +336,7 @@ class SympyToZ3:
         return ret
 
 
+
     def set_to_function(self, setobj: dsl.SetObject):
         sol = self.solver.sol
         domainsort = self.dsl_Type_to_sort(setobj.element_type)
@@ -366,6 +368,19 @@ class SympyToZ3:
                     # FIXME: inside a ForAll need to 
                     #sol.add(Implies
         return func
+
+
+    def undeffunc_to_z3(self, node):
+        func = node.func
+        if func in self.func_sorts:
+            funcsort = self.func_sorts[func]  # Wrong term for it?
+        else:
+            func_Type : dsl.Function = func.var_type
+            sig = [self.dsl_Type_to_sort(argtype) for argtype in func_Type.arg_types + (func_Type.element_type,)]
+            funcsort = Function(func.name, *sig)
+            self.func_sorts[func] = funcsort
+        args = [self.to_z3(arg) for arg in node.args]
+        return funcsort(*args)
 
     def to_z3(self, node: sympy.Basic) -> AstRef:
         if isinstance(node, sympy.Symbol):
@@ -406,8 +421,11 @@ class SympyToZ3:
         elif isinstance(node, dsl.max_types):
             return self.minmax_to_z3(node, 'max', max_of_values)
 
+        elif isinstance(node, sympy.core.function.AppliedUndef):
+            return self.undeffunc_to_z3(node)
+
         if trans is None:
-            print("to_z3 Unimplemented:", node, ", type =", type(node), ", func =", node.func)
+            print("to_z3 Unimplemented:", node, ", type =", type(node), ", func =", node.func)#, node.__class__.__mro__)
             raise NotImplementedError("translating " + str(node))
         args = [self.to_z3(arg) for arg in args]
         #print(f"TRANS {node.func}({node}, {args})")

@@ -39,8 +39,6 @@ def makeCall(name, args = [], keywords = [], copyloc = None):
         ret = ast.copy_location(ret, copyloc)
     return ast.fix_missing_locations(ret)
 
-dummy_idx = 0
-
 class ASTTransform(sympy.parsing.ast_parser.Transform):
 
     # TODO: -> Tuple
@@ -67,13 +65,12 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
             #print("WARNING: " + name + " is used in nested comprehensions or twice, not supported")
             raise DSLError(name + " is used in nested comprehensions or twice, not supported")
         # temp Dummy whch is replaced by subs by set_generator by a properly constructed symbol
-        global dummy_idx
-        dummy_idx += 1
-        sym = sympy.Dummy('bound' + str(dummy_idx))
+        dsl.dummy_idx += 1
+        sym = sympy.Dummy('bound' + str(dsl.dummy_idx))
         dummy_name = sym.name
         self.local_dict[dummy_name] = sym
 
-        # dummy_name = "dummy_" + str(dummy_idx)
+        # dummy_name = "dummy_" + str(dsl.dummy_idx)
         # #self.local_dict[sym.name] = 
         # #sym = self.local_dict['declarevar'](dummy_name, Type)
         # self.local_dict['declarevar'](dummy_name, Type)
@@ -130,13 +127,16 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
 
             if isinstance(name_obj, (sympy.Basic, type)) or callable(name_obj):
                 return node
+            return node
         elif node.id in ['True', 'False']:
             print("-=-------- PARSE", node)
             return node
-        #return ast.fix_missing_locations(
-        #    ast.Call(func=ast.Name('Symbol', ast.Load()),
-        #             args=[ast.Constant(node.id)], keywords=[]))
-        return node
+        else:
+            print("NAME", node.id)
+            return node
+            # return ast.fix_missing_locations(
+            #     ast.Call(func=ast.Name('declarevar', ast.Load()),
+            #          args=[ast.Constant(node.id), ast.Constant("Real")], keywords=[]))
 
     def visit_BoolOp(self, node):
         if AST_DEBUG:
@@ -197,7 +197,7 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
 
 
 # Modified copy of sympy.parsing.ast_parser.parse_expr
-def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode = "eval", lineno = 0):
+def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode = "eval", lineno = 0, def_Type = "Int"):
     """
     Parses the string "string" and convert python expressions to SymPy expressions
     and handle ζ-specific DSL syntax, and then executes it!
@@ -238,18 +238,28 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
     a = transformer.visit(a)
     if AST_DEBUG:
         print("REWRITTEN:\n", ast.dump(a, indent=4, include_attributes = include_attributes))
-    try:
-        e = compile(a, "<string>", mode)
-        with ζ.util.time_limit(SECONDS_LIMIT):
-            with ζ.util.memory_limit(MB_LIMIT * 2**20):
-                #print(mode.upper(),  ast.dump(a))
-                ret = eval(e, global_dict, local_dict)
-                #print("GOT", ret)
-                return ret
-    except NotImplementedError:
-        raise
-    except Exception as e:
-        raise DSLError(f"DSL script threw {type(e).__name__} '{str(e).strip()}'  on line  '{string}'", lineno)
+    for repeat in range(2):
+        try:
+            e = compile(a, "<string>", mode)
+            with ζ.util.time_limit(SECONDS_LIMIT):
+                with ζ.util.memory_limit(MB_LIMIT * 2**20):
+                    #print(mode.upper(),  ast.dump(a))
+                    ret = eval(e, global_dict, local_dict)
+                    #print("GOT", ret)
+                    return ret
+        except NameError as e:
+            print(e)
+            m = re.search("'(\w+)' is not defined", str(e))
+            if m:
+                name = m.group(1)
+                print("Trying to fix name error...")
+                global_dict['declarevar'](name, "Int" if name in "ijn" else def_Type)
+                continue
+            raise
+        except NotImplementedError:
+            raise
+        except Exception as e:
+            raise DSLError(f"DSL script threw {type(e).__name__} '{str(e).strip()}'  on line  '{string}'", lineno)
 
 #parse_expr("  x : Point() >= 4\nprint(__annotations__)", {'Point': lambda p=3: 42}, global_namespace, mode = "exec")
 #parse_expr("x,y : int", {'Point': lambda p=3: 42}, global_namespace, mode = "exec")
@@ -331,6 +341,17 @@ def load_dsl(script, verbose = True):
 
     namespace = workspace.locals
 
+    Ints = script.count("Int")
+    Reals = script.count("Real")
+    Complexes = script.count("Complex")
+    if Complexes:
+        def_Type = "Complex"
+    elif Reals >= Ints:
+        def_Type = "Real"
+    else:
+        def_Type = "Int"
+
+
     for lineno, line in enumerate(script.split('\n')):
 
         # Remove comments
@@ -344,7 +365,7 @@ def load_dsl(script, verbose = True):
 
         # Special case, allow multiple variables in a type annotation
         # Breaks on bad syntax like Lambda(x:Int, ...)
-        m = re.match("([^:]+):(.+)$", line)
+        m = re.match("([^():]+):(.+)$", line)
         if m:
             vars = m.group(1).split(',')
             annot = m.group(2)
@@ -402,7 +423,7 @@ def load_dsl(script, verbose = True):
 
         #res = sympy.parse_expr(line, namespace, transformations = transformations)
 
-        res = parse_and_eval_dsl(line, namespace, global_namespace, "exec", lineno)
+        res = parse_and_eval_dsl(line, namespace, global_namespace, "exec", lineno, def_Type)
 
         if verbose and res is not None:
             print(" eval->", res)
@@ -498,17 +519,9 @@ goal = min(n)
 """
 
     intext="""
-# Declare the unknown list s as a sequence of integers
-s : Seq(Int, len = 5)
-# The median of s is 9
-median(s) == 9
-# The average of s is 10
-average(s) == 10
-# There is only one 8 in s
-count(x == 8 for x in s) == 1
-# The largest possible integer that could appear in s is the maximum of all possible assignments to s
-goal = max(s)
-
+x : Int
+x % 8 == 3
+goal = x
 """
 
     workspace = load_dsl(intext)
