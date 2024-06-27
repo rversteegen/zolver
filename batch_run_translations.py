@@ -12,7 +12,7 @@ import os
 sys.path.append("ζolve")
 from ζ import dsl, dsl_parse, ζ3, solver
 
-INPUTDIR = "translations3/"
+INPUTDIR = "translations4/"
 
 extracts = ""
 
@@ -20,6 +20,7 @@ selections = []
 
 stats_template = {
     'fname': '',
+    'temp': 0,
             'prob_name' : '',
             'difficulty': 0,
             'total': 1,  #len(df),
@@ -53,6 +54,7 @@ def process_file(fname):
         row = df.loc[idx]
         stats = pd.DataFrame(stats_template, index = [0])
         stats.fname = fname
+        stats.temp = row.temperature
         stats.prob_name = row.prob_name
         stats.difficulty = int(row.difficulty)
 
@@ -94,7 +96,7 @@ def process_file(fname):
                 stats.unimp += 1
                 #stats.solvefailed += 1
                 res_note = repr(e)
-            except (SyntaxError, dsl.DSLError, ζ3.MalformedError) as e:
+            except (AssertionError, SyntaxError, dsl.DSLError, ζ3.MalformedError, ζ3.z3.Z3Exception) as e:
                 print("---------------SOLVE FAILED")
                 stats.solvefailed += 1
                 res_note = repr(e)
@@ -104,7 +106,7 @@ def process_file(fname):
             stats.unimp += 1
             #stats.solvefailed += 1
             res_note = repr(e)
-        except (SyntaxError, dsl.DSLError, ζ3.MalformedError) as e:
+        except (AssertionError, SyntaxError, dsl.DSLError, ζ3.MalformedError) as e:
             print("---------------PARSE FAILED")
             print(e)
             line_err = ""
@@ -140,7 +142,7 @@ if False:
 else:
     stats = pd.DataFrame()
     for fname in os.listdir(INPUTDIR):
-        if fname.endswith('.csv'):# and 'InternLM2Math7b_v4' in fname:
+        if fname.endswith('.csv'):#  and 'v8' in fname:
             stats = pd.concat([stats, process_file(fname)])
             # if len(stats)> 100:
             #     break
@@ -164,7 +166,11 @@ print(probs.to_string())
 
 
 print("######################################## TALLY BY FILE")
-files = stats.groupby(['fname']).sum(numeric_only = True)
+files = stats.groupby(['fname',]).sum(numeric_only = True)
+print(files.to_string())
+
+print("######################################## TALLY BY FILE+TEMP")
+files = stats.groupby(['fname','temp']).sum(numeric_only = True)
 print(files.to_string())
 
 

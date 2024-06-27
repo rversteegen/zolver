@@ -275,6 +275,9 @@ class SetObject(sympy.Set):  #sympy.Basic):
                 # TODO: add recursion testcase
                 if hasattr(sym, 'var_in_set') and isinstance(sym.var_in_set, SetObject):
                     constraints.append( sym.var_in_set.membership_constraints(newsym) )
+                # TODO: add integer constraint
+                # if sym.var_in_set == Int:
+                #     constraints.append( Mod(sym, 
 
             # The element is equal to the expr
             newexpr = self.expr.xreplace(newsyms)

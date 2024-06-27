@@ -68,8 +68,13 @@ max = wrap_max
 min = wrap_min
 
 # sympy.Product is always unevaluated, sympy.product simplifies to an expression or produces a Product
-Product = sympy.product
+#Product = sympy.product
 # But there's no similar sympy.sum!
+
+def product(*args):
+    args = args_or_iterable(args)
+    return sympy.product(*args)
+
 
 #sum = VarargsFunction('Sum')
 
@@ -79,8 +84,8 @@ def sum(*args):
 
 
 # sympy lcm/gcd are not symbolic
-lcm = VarargsFunction('LCM', minargs = 2)
-gcd = VarargsFunction('GCD', minargs = 2)
+#lcm = VarargsFunction('LCM', minargs = 2)
+#gcd = VarargsFunction('GCD', minargs = 2)
 
 mod = sympy.Mod
 

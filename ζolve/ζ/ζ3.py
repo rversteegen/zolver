@@ -100,6 +100,7 @@ class SympyToZ3:
             sympy.And:         lambda node, *args:     And(*args),
             sympy.Or:          lambda node, *args:     Or(*args),
 
+            sympy.Mod:         lambda node, lhs, rhs:  lhs % rhs,
             sympy.Pow:         lambda node, lhs, rhs:  lhs ** rhs,  # 1/z is sympy.Pow(z, -1), x/y is Mul
             #sympy.Pow:     self.pow_to_z3,
             sympy.Abs:         lambda node, arg:  If(arg < 0, -arg, arg),
@@ -417,7 +418,7 @@ class SympyToZ3:
         #         return functools.reduce(trans, [node] + args)
 
         try:
-            print("to_z3 trans:", node, ", type =", type(node), ", func =", node.func)
+            #print("to_z3 trans:", node, ", type =", type(node), ", func =", node.func)
             return trans(node, *args)
         except TypeError as e:
             # Something like mixing bools and ints
@@ -666,6 +667,14 @@ class Z3Solver():
 
         self.solution_attained = True
         return solved
+
+    def bound_solutions(self, vars):
+        # Ignore the goal
+        # Find initial soln and grow the search space outwards
+        print("Bound_Solutions", vars)
+        ret = self.find_one_solution()
+        for var in vars:
+            pass
 
     def have_quants(self) -> bool:
         "Returns true if any constraints or the goal contain quantifiers"

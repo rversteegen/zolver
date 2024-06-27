@@ -239,7 +239,7 @@ class ζolver:
 
         prompt = choose_prompt(makegen(), self.problem, self.maxlength)
 
-        REPEATS = 2
+        REPEATS = 4
 
         for repeat in range(REPEATS):
             print(repeat, "timeleft", time_left())
@@ -253,7 +253,7 @@ class ζolver:
                 # gen = makegen()
                 # gen.append_prompt(prompt, show = False)
 
-                temp = max(0.9, 0.6 + repeat * 0.2)
+                temp = max(0.9, 0.4 + repeat * 0.15)
                 # gen.generate(temp, limit = 600, skip_check = True)
                 # outputs = [gen.new_output]
 
@@ -272,8 +272,7 @@ class ζolver:
                 if time_left() < 5:
                     return
                 if self.try_translation(translation):
-                    return
-                    #return True  # FIXME
+                    return True  # FIXME
 
     def try_translation(self, translation):
         try:
@@ -290,13 +289,13 @@ class ζolver:
                 print("No conclusion.")
                 return
 
-            score = 1
+            score = 2.
             info = "ζolve"
             if ζ.dsl.is_a_constant(workspace.goal):
-                score = 0.6
+                score = 0.8
                 info = "ζolve-constant"
             self.best, best_score, score_gap = self.scorelog.add_answer(workspace.solution, score, info)
-            if (score_gap >= 5 or best_score >= 7): # and not VALIDATE:  ####FIXM
+            if (score_gap >= 6 or best_score >= 7): # and not VALIDATE:  ####FIXM
                 print("ζOLVE EARLY FINISH")
                 return True
 
