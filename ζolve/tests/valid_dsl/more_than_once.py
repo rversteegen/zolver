@@ -10,14 +10,14 @@
 # What is the largest possible integer that could appear in the list? 
 
 ## TRANS
-# Declare the unknown list s as a sequence of integers
-s : Seq(Int, len = 5)
-# The median of s is 9
-median(s) == 9
-# The average of s is 10
-average(s) == 10
-## Not implemented
-count(x == 8 for x in s) == 1
-# The largest possible integer that could appear in s is the maximum of all possible assignments to s
-goal = min(s)
+# Name the list x
+x : Seq(Int, len = 5)
+# 8 occurs more than once
+ForAll(x[i] == 8 for i in Int if i != j and x[i] == x[j] and j in Int)
+# The median is 9
+median(x) == 9
+# The average is 10
+average(x) == 10
+# The largest possible integer is the maximum of x
+goal = max(x)
 expected_answer = '?'

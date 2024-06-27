@@ -81,17 +81,19 @@ class BoolReturningFunction(sympy.core.function.Application, sympy.logic.boolalg
 
 class ForAll(BoolReturningFunction):
     def __new__(cls, *args):
-        if len(args) != 1:
-            raise TypeError("ForAll should have one arg, got " + str(args))
-        if not isinstance(args[0], SetObject):
+        if len(args) != 1 or not isinstance(args[0], SetObject):
             raise TypeError("ForAll argument should be a comprehension, got " + str(args[0]))
-        #print("Createing ForAll with", cls, args)
         ret = super().__new__(cls, *args)
         return ret
 
-
-def Exists(vars, *args):
-    raise NotImplementedError("Exists")
+class Exists(BoolReturningFunction):
+    def __new__(cls, *args):
+        "First arg is exp, remaining are syms"
+        print("EXISTS",args)
+        # if len(args) != 2 or not isinstance(args[0], list):
+        #     raise TypeError("Exists takes 2 args")
+        ret = super().__new__(cls, *args)
+        return ret
 
 # sympy.minimum/maximum(f, symbol, domain=Reals) returns the min/max of a function or expression,
 # if the expression doesn't contain the symbol it's returned.

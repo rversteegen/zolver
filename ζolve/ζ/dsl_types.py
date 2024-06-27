@@ -250,12 +250,49 @@ class SetObject(sympy.Set):  #sympy.Basic):
         self.evaluated = element_vars
         return self.evaluated
 
+    def membership_constraints(self, elmt):
+        "Given elmt ∈ self (not bound args), return constraints as an Exists, or empty list"
+        # We could have used a single ForAll for all set elements, but z3 needs to expand those out as
+        # follows anyway.
+        if self.expr is not None:
+            # if self.expr == self.syms[0]:
+            #     # Trivial expression, avoid Exists
+            #     for cons in self.constraints:
+            #         if self.expr in cons.free_symbols:
+            #             pass
+
+            # TODO: test stuff like  (x for x in S for y in T if x==y)
+
+            constraints = []
+
+            # Instantiate the index vars
+            newsyms = {}
+            for sym in self.syms:
+                newsym = sympy.Dummy(**sym.assumptions0)
+                newsyms[sym] = newsym
+
+                # TODO: merge this path with add_element_of_constraints()
+                # TODO: add recursion testcase
+                if hasattr(sym, 'var_in_set') and isinstance(sym.var_in_set, SetObject):
+                    constraints.append( sym.var_in_set.membership_constraints(newsym) )
+
+            # The element is equal to the expr
+            newexpr = self.expr.xreplace(newsyms)
+            constraints.append(sympy.Eq(newexpr, elmt))
+
+            # Index vars are constrained
+            for cons in self.constraints:
+                constraints.append(cons.xreplace(newsyms))
+
+            return dsl.Exists(sympy.And(*constraints), *newsyms.keys())
+        return True
+
     def add_constraints_for_generated_element(self, elmt):
         # We have extra constraints on the elements
         print(f"add_constraints_for_generated_element: {elmt}")
-        for cons in self.constraints:
-            print(f"add_constraints_for_generated_element: {elmt}, {cons}")
-            pass #dsl.constraint(cons)
+        cons = self.membership_constraints(elmt)
+        if cons is not True:
+            dsl.constraint(cons)
 
     def add_constraints_for_expression(self):
         # Easy, since the bound variables are the same in expr, constraints, and
@@ -267,7 +304,8 @@ class SetObject(sympy.Set):  #sympy.Basic):
             dsl.constraint(cons)
         # Bound vars belong to their sets
         for bvar in self.syms:
-            dsl.constraint(sympy.Contains(bvar, bvar.var_in_set, evaluate = False))
+            if bvar.var_in_set is not None:
+                add_element_of_constraint(bvar, bvar.var_in_set)
 
     # Basic.count() is for counting subexprs
     # Set.measure() is for the measure of intervals/etc
@@ -282,7 +320,11 @@ class SetObject(sympy.Set):  #sympy.Basic):
 
     def __contains__(self, obj):
         """Overrides Set.__contains__ which always returns true/false.
-        We instead use 'in' to construct Contains objects."""
+        We instead use 'in' to construct Contains objects.
+        NOTE: actually we don't, parser replaces 'in' with Element!
+        Note: in general should call add_set_element_constraint()
+        """
+        # DON'T USE THIS!, missing .membership_constraints!
         return sympy.Contains(obj, self, evaluate = False)
 
     # def _contains(self, obj):
@@ -306,7 +348,13 @@ class SeqObject(SetObject):
 
     def __getitem__(self, idx):
         "Get or make an element"
-#        print("Seq getitem", idx)
+        #print("Seq getitem", idx)
+        idx = idx.doit()
+        try:
+            idx = int(idx)
+        except TypeError:
+            raise NotImplementedError("Only constant sequence indices supported.")
+
         if self.length is None:
             if idx < 0:
                 raise DSLError("Can't index seq of unknown len from the end")
@@ -335,6 +383,18 @@ class SeqObject(SetObject):
         self.partial_elements[idx] = elmt
         return elmt
 
+
+
+def set_constructor(*args):
+    if len(args) == 1:
+        obj = args[0]
+        if isinstance(obj, SeqObject):
+            # ugh! And set([...]) seems commmon
+            raise NotImplementedError("seq to set")
+        if isinstance(obj, SetObject):
+            return obj
+        # Todo: set(e) for all values of e. Too much work?
+    return finite_set_constructor(args)
 
 
 def finite_set_constructor(objects):
@@ -546,6 +606,8 @@ def declarevar(name, Type):
     _ctx.locals[name] = sym
     return sym
 
+###############################################################################
+
 def constraint_hook(expr):
     """Called from constraint().
     Set these links up here so we can make use of them immediately to simplify while building the DSL"""
@@ -563,3 +625,21 @@ def constraint_hook(expr):
             else:
                 sym.var_in_set = theset
 
+
+def add_element_of_constraint(elmt, set_or_Type):
+    "Calls dsl.constraint(). Works for adding as element of Int, etc, too. And Set or Seq."
+    if isinstance(set_or_Type, SetObject):
+        dsl.constraint(sympy.Contains(elmt, set_or_Type, evaluate = False))
+        return
+    Type = set_or_Type
+    # Actually, don't want to handle any others, basic types should already be set.
+    if isinstance(Type, TypeClass):
+        # Seq(), Set() types. Nothing to do.
+        pass
+    elif type(Type) == type:
+        # Something like Point, Line, Set
+        # Could add in Line, Circle, except would need 2D point variables
+        raise NotImplementedError(f"Using {Type} object as a type")
+    elif isinstance(Type, sympy.Set):
+        # Something like Interval. Could add that.
+        raise NotImplementedError(f"Using {Type} object as a type")

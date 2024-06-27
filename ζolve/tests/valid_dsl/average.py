@@ -9,3 +9,4 @@ average(s) == 10
 #goal = max(s)
 s[0]==2
 goal = median(s)
+expected_answer = 'notunique'

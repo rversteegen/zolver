@@ -51,20 +51,18 @@ def goal(expr):
 ###############################################################################
 ### Functions
 
+# NOTE: forgot about this, been using Contains
+#Element = sympy.Function('ζelement')
+def Element(a, b):
+    #print(b, type(b), repr(b))
+    ret = sympy.Contains(a, b, evaluate = False)
+    # if isinstance(b, SetObject):
+    #     # Add an Exists with the membership rules
+    #     membership = b.membership_constraints(a) 
+    #     return And(ret, membership)
+    return ret
 
-#def Element(el, ofset):
-
-Element = sympy.Function('ζelement')
-
-# TODO: these quantifier/set-operation functions should be python functions which check the args
-# and then return a sympy.Expr/Basic
-
-#count = VarargsFunction('ζcount')
-#count = ζcount
-
-set = sympy.Function('ζset')
-
-#  Count, Set, Max, Min.
+set = set_constructor
 
 max = wrap_max
 min = wrap_min
@@ -76,13 +74,8 @@ Product = sympy.product
 #sum = VarargsFunction('Sum')
 
 def sum(*args):
-    if len(args) > 1:
-        # Actually becomes an Add
-        #return builtins.sum(args)
-        return Add(args)
+    args = args_or_iterable(args)
     return Add(*args)
-    #return sympy.Sum(*args)
-
 
 
 # sympy lcm/gcd are not symbolic

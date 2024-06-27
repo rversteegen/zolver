@@ -43,6 +43,8 @@ dummy_idx = 0
 
 class ASTTransform(sympy.parsing.ast_parser.Transform):
 
+    # TODO: -> Tuple
+
     # def __init__(self, *args):
     #     self.bound_vars = {}  # name -> name of replacement symbol
         #super.__init__(self, *args)

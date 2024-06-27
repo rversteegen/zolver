@@ -47,13 +47,14 @@ for testfile in testfiles:
         expected = ζ.solver.unsat
     elif expected == 'notunique':
         expected = ζ.solver.notunique
+    elif expected == '?':
+        pass
     else:
         # WTF, whys is Integer(3) != 3.0 sometimes
-        if expected == int(expected):
+        if expected.is_Integer:
             expected = int(expected)
-        else:
+        elif expected.is_Float:
             expected = float(expected)
-
 
     if ans != expected:
         print("Expected", expected, "got", ans)

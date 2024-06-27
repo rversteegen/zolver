@@ -97,8 +97,8 @@ class SympyToZ3:
             sympy.Lt:          lambda node, lhs, rhs:  lhs <  rhs,
             sympy.Ge:          lambda node, lhs, rhs:  lhs >= rhs,
             sympy.Gt:          lambda node, lhs, rhs:  lhs >  rhs,
-            sympy.And:         lambda node, lhs, rhs:  lhs &  rhs,
-            sympy.Or:          lambda node, lhs, rhs:  lhs |  rhs,
+            sympy.And:         lambda node, *args:     And(*args),
+            sympy.Or:          lambda node, *args:     Or(*args),
 
             sympy.Pow:         lambda node, lhs, rhs:  lhs ** rhs,  # 1/z is sympy.Pow(z, -1), x/y is Mul
             #sympy.Pow:     self.pow_to_z3,
@@ -152,7 +152,7 @@ class SympyToZ3:
         if sym in self.varmap:
             return self.varmap[sym]
 
-        assert not isinstance(sym, sympy.Dummy), "Dummy!!!"
+        ##assert not isinstance(sym, sympy.Dummy), "Dummy!!!"  # because of membership tests
 
         #print(f"symbol {sym} assump:: {sym.assumptions0}")
         assert sym.is_symbol, "Expected a symbol (declared unknown), got " + str(sym)    # Not is_Symbol; a Idx isn't
@@ -178,7 +178,7 @@ class SympyToZ3:
             z3var = Real(sym.name)
         else:
             assert isinstance(sym, dsl.ζObjectSymbol), "unknown symbol type"
-            assert False  # We already checked  #raise NotImplementedError(f"Variable {sym} has unknown domain {sym.var_type}")
+            raise NotImplementedError(f"Variable {sym} has unknown domain {sym.var_type}")
 
         self.varmap[sym] = z3var
         return z3var
@@ -193,6 +193,7 @@ class SympyToZ3:
         #if isinstance
 
     def Contains_to_z3(self, node : sympy.Contains):
+        assert isinstance(node.args[1], dsl.SetObject), "not set obj!"
         elmt = self.to_z3(node.args[0])
         setobj = node.args[1]
         elements = setobj.inst_element_list(tryagain = True)  # calls try_eval()
@@ -202,9 +203,102 @@ class SympyToZ3:
             #print("ONEOF", oneof)
             #self.solver.sol.add(Or(*oneof))
         else:
-            # Need uninterpreted function.
-            raise NotImplementedError("containment in an unbounded set/seq")
+            # If it's unbounded, only the constraints (inc expr, parent sets) matter.
+            # <s>Assume the constraints are already added using SetObject.membership_constraints().</s>
 
+            # Ether True or an Exists with the membership rules
+            membership = setobj.membership_constraints(node.args[0])
+
+            return self.to_z3(membership)
+
+            # Should we be adding a bool for membership, and identify it with the constraints?
+
+            # Need uninterpreted function.
+            #raise NotImplementedError("containment in an unbounded set/seq")
+
+
+    def count_to_z3(self, node : dsl.ζcount):
+        "CAN ONLY BE A GOAL"
+        # If counting a Seq/Set, translate it
+        # Strip the count()
+        if len(node.args) > 1:
+            # Maybe treat as union?
+            raise DSLError("count of multiple args not understood")
+        elif isinstance(node.args[0], dsl.SetObject):   # And SeqObject
+            # Either asking for count of a finite set or of a set generator
+            setobj = node.args[0]
+            # NOTE: this can add more constraints to the workspace for new variables
+            # which is ok since ζ3_solve() hasn't sent them to us yet.
+            # This deals with .partial_elements.
+            setobj.try_eval(tryagain = True)
+            if setobj.length is not None:
+                return self.to_z3(setobj.length)
+            if setobj.partial_elements:
+                print("Warning. Ignoring partial_elements")  # Probably harmless.
+            # generator?
+            if setobj.expr is None:
+                # TODO! Just find solutions
+                raise NotImplementedError("Can't count an undefined set/seq")
+                #self.finite_count = True
+            else:
+                # Count the expression with its bound vars directly, subject to the constraints
+                setobj.add_constraints_for_expression()
+                return self.to_z3(setobj.expr)
+
+        else:
+            if not isinstance(node.args[0], sympy.Basic):
+                raise dsl.DSLError("count() with non-sym arg: " + str(node.args))
+            node = node.args[0]
+            return self.to_z3(node)
+
+    def minmax_to_z3(self, node, optname, minmax_of_values):
+        "node is in min_types or max_types"
+        if len(node.args) > 1:
+            # Asking for max of a finite set (may not need maximize()),
+            args = [self.to_z3(arg) for arg in node.args]
+            return minmax_of_values(args)
+        elif isinstance(node.args[0], dsl.SetObject):   # And SeqObject
+            # Either asking for max of a finite set (may not need maximize()),
+            # or the max of set generator (translate to maximize())
+            setobj = node.args[0]
+            # NOTE: this can add more constraints to the workspace for new variables
+            # which is ok since ζ3_solve() hasn't sent them to us yet.
+            # This deals with .partial_elements.
+            elements = setobj.inst_element_list(tryagain = True)  # calls try_eval()
+            if elements is not None:
+                # Each individual element has its type processed into constraints
+                print("got elements", elements)
+                elements = [self.to_z3(arg) for arg in elements]
+                if setobj.elements_are_sorted:  # yay
+                    if optname == 'max':
+                        return elements[-1]
+                    else:
+                        return elements[0]
+                else:
+                    return minmax_of_values(elements)
+            else:
+                if setobj.partial_elements:
+                    print("WARNING!!! Ignoring partial_elements!")
+                # generator?
+                if setobj.expr is None:
+                    # TODO! Just find solutions and calc max
+                    raise NotImplementedError("Can't take {optfunc} of an undefined set/seq")
+                    self.finite_minmax = True
+                else:
+                    # Subject to the constraints
+                    setobj.add_constraints_for_expression()
+                    return self.to_z3(setobj.expr)
+        else:
+            # Max of another expression
+            return self.to_z3(node.args[0])
+
+
+    def Exists_to_z3(self, node: dsl.Exists):
+        if len(node.args) < 2:
+            assert False, "Bad Exists args " + str(node.args)
+        expr = self.to_z3(node.args[0])
+        syms = [self.to_z3(sym) for sym in node.args[1:]]
+        return Exists(syms, expr)
 
     def ForAll_to_z3(self, node: dsl.ForAll):
         if len(node.args) != 1 or not isinstance(node.args[0], dsl.SetObject):
@@ -302,9 +396,14 @@ class SympyToZ3:
         # Specials which handle translation of their args themselves (because they take sets/seqs as args)
         elif isinstance(node, dsl.ForAll):
             return self.ForAll_to_z3(node)
+        elif isinstance(node, dsl.Exists):
+            return self.Exists_to_z3(node)
         elif isinstance(node, sympy.Contains):
             return self.Contains_to_z3(node)
-
+        elif isinstance(node, dsl.min_types):
+            return self.minmax_to_z3(node, 'min', min_of_values)
+        elif isinstance(node, dsl.max_types):
+            return self.minmax_to_z3(node, 'max', max_of_values)
 
         if trans is None:
             print("to_z3 Unimplemented:", node, ", type =", type(node), ", func =", node.func)
@@ -318,6 +417,7 @@ class SympyToZ3:
         #         return functools.reduce(trans, [node] + args)
 
         try:
+            print("to_z3 trans:", node, ", type =", type(node), ", func =", node.func)
             return trans(node, *args)
         except TypeError as e:
             # Something like mixing bools and ints
@@ -368,47 +468,6 @@ class Z3Solver():
     first_print = True
     print_all_checks = True
 
-    def get_goal_for_minmax(self, goal, optname, minmax_of_values):
-        if len(goal.args) > 1:
-            # Asking for max of a finite set (may not need maximize()),
-            args = [self.trans.to_z3(arg) for arg in goal.args]
-            self.goal = max_of_values(args)
-        elif isinstance(goal.args[0], dsl.SetObject):   # And SeqObject
-            # Either asking for max of a finite set (may not need maximize()),
-            # or the max of set generator (translate to maximize())
-            setobj = goal.args[0]
-            # NOTE: this can add more constraints to the workspace for new variables
-            # which is ok since ζ3_solve() hasn't sent them to us yet.
-            # This deals with .partial_elements.
-            elements = setobj.inst_element_list(tryagain = True)  # calls try_eval()
-            if elements is not None:
-                # Each individual element has its type processed into constraints
-                print("got elements", elements)
-                elements = [self.trans.to_z3(arg) for arg in elements]
-                if setobj.elements_are_sorted:  # yay
-                    if optname == 'max':
-                        self.goal = elements[-1]
-                    else:
-                        self.goal = elements[0]
-                else:
-                    self.goal = max_of_values(elements)
-            else:
-                if setobj.partial_elements:
-                    print("WARNING!!! Ignoring partial_elements!")
-                # generator?
-                if setobj.expr is None:
-                    # TODO! Just find solutions and calc max
-                    raise NotImplementedError("Can't take {optfunc} of an undefined set/seq")
-                    self.finite_minmax = True
-                else:
-                    self.goal = self.trans.to_z3(setobj.expr)
-                    # Subject to the constraints
-                    setobj.add_constraints_for_expression()
-
-        else:
-            # Max of another expression
-            self.goal = self.trans.to_z3(goal.args[0])
-
     def __init__(self, goal):
         self.solutions = set()
 
@@ -416,32 +475,27 @@ class Z3Solver():
         print("goal is", repr(goal))
         if isinstance(goal, dsl.max_types):  # in fact type(dsl.max(...)) == dsl.max !
             self.goal_func = 'max'
-            self.get_goal_for_minmax(goal, 'max', max_of_values)
+            self.goal = self.trans.to_z3(goal)
             self.sol = Optimize()
             self.objective = self.sol.maximize(self.goal)
         elif isinstance(goal, dsl.min_types):
             self.goal_func = 'min'
-            self.get_goal_for_minmax(goal, 'min', min_of_values)
+            self.goal = self.trans.to_z3(goal)
             self.sol = Optimize()
             self.objective = self.sol.minimize(self.goal)
         else:
             self.goal_func = ''
 
             if isinstance(goal, dsl.ζcount):
-                # Strip the count()
-                assert len(goal.args) == 1
-                if not isinstance(goal.args[0], sympy.Basic):
-                    raise dsl.DSLError("count() with non-sym arg: " + str(goal.args))
-                goal = goal.args[0]
                 self.goal_func = 'count'
-                # If counting a Seq/Set, translate it
-
+                self.goal = self.trans.count_to_z3(goal)
+            else:
+                self.goal = self.trans.to_z3(goal)
 
             self.sol = Solver()
             self.sol.set('randomize', False)  # for nlsat
             self.sol.set('max_memory', 500)
             # Also has an rlimit option, what does it do?
-            self.goal = self.trans.to_z3(goal)
         #self.sol.set('timeout', 3000)  # ms
 
     def delete(self):
