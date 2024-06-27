@@ -3,7 +3,7 @@ DSL function implementations, aside from constructors and trivial wrappers
 """
 
 from sympy import *
-from ζ.dsl_helpers import *
+from ζ.dsl_types import *
 import ζ.dsl
 
 
@@ -11,39 +11,50 @@ import ζ.dsl
 
 
 ################################################################################
-### Variable Type tags
 
-# Int = lambda name, **assumptions: Symbol(name, integer=True, **assumptions)
-# Real = lambda name, **assumptions: Symbol(name, real=True, **assumptions)
-# Complex = lambda name, **assumptions: Symbol(name, complex=True, **assumptions)
-# # Convenience only
-# Nat = lambda name, **assumptions: Symbol(name, integer=True, positive=True, **assumptions)
-# Nat0 = lambda name, **assumptions: Symbol(name, integer=True, nonnegative=True, **assumptions)
+# class VarargsFunction:
+#     "Wrap sympy.Function(name) to allow lists and sets as args."
+#     def __init__(self, name, minargs = 1):
+#         self.func = sympy.Function(name)
+#         self.minargs = minargs
 
-# Type tags which are translated by declarevar() into ζSymbols
-Bool = "Bool"
-Int = "Int"
-Real = "Real"
-Complex = "Complex"
-Nat = "Nat"
-Nat0 = "Nat0"
+#     def __call__(self, *args):
+#         args = args_or_iterable(args)
+#         if len(args) < self.minargs:
+#             raise TypeError(f"{name} expects at least {self.minargs} arg(s), was passed {len(args)}")
+#         return self.func(*args)
 
-Sym = sympy.Symbol
+# class VarargsFunction(sympy.Function):
+#     # Note: name must not match any existing sympy function, such as 'gcd', because there's a cache
+#     def __new__(cls, name, minargs = 1):
+#         print("!!!init ", cls, name, minargs)
+#         ret = super().__new__(cls, name)
+#         print("  super done")
+#         return ret
 
+#     @classmethod
+#     def _valid_nargs(cls, nargs):
+#         # Used by Function.__init__
+#         print("!!!!! _valid_nargs")
+#         return True
 
-def Seq(subtype = Real, length = None, limit = None, **unknown):
-    "This function is a callable Type tag"
-    if limit is not None:   # obsolete name
-        length = limit
-    if unknown:
-        print(f"WARN: unknown args: Seq({unknown})")
-    def makeSym(name):
-        ret = SeqSymbol(name)
-        # TODO: allow recursive subtypes Seq(Seq(...))
-        ret.el_type = subtype
-        ret.seq_limit = limit
+class VarargsFunction(sympy.Function):
+    def __new__(cls, name, **options):# kind = NumberKind):  #minargs = 1):
+        ret = super().__new__(cls, name, evaluate = False)# **options)
+        for opt,val in options.items():
+            ret.__dict__[opt] = val
         return ret
-    return makeSym
+    def __call__(self, *args):# kind = NumberKind):  #minargs = 1):
+        print("__call__")
+        super().__call__(self, *args)
+        
+    # @classmethod
+    # def eval(cls, *args):
+    #     print("max eval")
+    @classmethod
+    def _should_evalf(cls, arg):
+        # Allow the arg to be a non-sympy expression, such as a list of args
+        return False
 
 
 ################################################################################

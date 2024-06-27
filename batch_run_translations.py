@@ -63,7 +63,8 @@ def process_file(fname):
             print("PARSE SUCCESS")
             workspace.print()
             stats.parsed += 1
-            if workspace.goal is not None and workspace.goal.is_constant:
+            trivial = dsl.is_a_constant(workspace.goal)
+            if workspace.goal is not None and trivial:
                 stats.trivial += 1
             try:
                 res = workspace.solve()
@@ -80,12 +81,12 @@ def process_file(fname):
                     if row.answer == workspace.solution:
                         stats.correct += 1
                         correct = True
-                        if workspace.goal.is_constant:
+                        if trivial:
                             stats.trivialcorrect += 1
                         extracts += "\n\n" + row.problem + "\n\n----->\n" + row.translation
                     else:
                         stats.wrong += 1
-                        if workspace.goal.is_constant:
+                        if trivial:
                             stats.trivialwrong += 1
 
             except NotImplementedError as e:
