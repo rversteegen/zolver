@@ -1,11 +1,15 @@
 
 import time
 from collections import defaultdict
+import pandas as pd
+
 import ζ.solver, ζ.dsl, ζ.dsl_parse, ζ.ζ3
 #from ζ import dsl, dsl_parse, ζ3
 
 ################################################################################
 ## Prompt and topic
+
+PROMPT_VER = "V8.2"
 
 PROMPT_FILE = "/kaggle/input/zolver/ζolve/prompt.txt"  #temp
 
@@ -184,7 +188,7 @@ except ImportError:
 x : Int
 constraint(is_prime(x))
 constraint(x >= 98)
-goal = min(x)"""] * numseqs
+goal = min(x)"""] * numseqs, {'gen_tokens':[10] * numseqs, 'gen_time':1.0}
 
     
 
@@ -193,9 +197,23 @@ goal = min(x)"""] * numseqs
 ## 
 
 class ScoreLog:
-    def __init__(self):
+    "Collection of scores for a single problem"
+    def __init__(self, prob_id, logdf = None, log_path = None):
         self.outputs = []  # List of (answer, score, info) tuples
         self.answer_scores = defaultdict(int)  # answer -> total_score
+        if logdf is not None:
+            self.logdf = logdf
+        else:
+            self.logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'translation', 'temperature', 'score', 'answer', 'result_info', 'gen_tokens', 'transtime', 'time', 'error'])
+        self.log_path = log_path
+        self.problem_id = prob_id
+        self.logrow = None
+
+    def new_row(self):
+        self.logrow = pd.DataFrame(columns = self.logdf.columns)
+        self.logrow.loc[0] = 0
+        self.logrow.problem_id = self.problem_id
+        return self.logrow
 
     def add_answer(self, answer, score, result_info):
         print(f"RESULT = {answer} SCORE = {score}")
@@ -214,12 +232,22 @@ class ScoreLog:
                 score_gap = best_score
             return best, best_score, score_gap
 
+    def log(self, **data):
+        for key, val in data.items():
+            self.logrow[key] = val
+        self.logdf = pd.concat([self.logdf, self.logrow], ignore_index = True)
+        self.logdf.to_csv(self.log_path)
+        self.logrow = None
+
+    def exception(self, e):
+        self.logrow.error = f"{e.__class__.__name__}: {e}"
+
 
 class ζolver:
-    def __init__(self, problem, multiprocessing = None, maxlength = 10000):
+    def __init__(self, problem, scorelog, multiprocessing = None, maxlength = 10000):
         self.maxlength = maxlength
         self.problem = problem
-        self.scorelog = ScoreLog()
+        self.scorelog = scorelog
         self.best = 0
         self.multiprocessing = multiprocessing
 
@@ -242,14 +270,15 @@ class ζolver:
         REPEATS = 4
 
         for repeat in range(REPEATS):
-            print(repeat, "timeleft", time_left())
+            print(f"repeat {repeat}/{REPEATS}, timeleft", time_left())
             if time_left() < 30:
                 return
             # Give each repeat at least timeout/REPEATS time
             #time_for_item = min(time_left, timeout / max(1, REPEATS - repeat)
             #time_for_item = max(10, min(time_left(),  30))
 
-            try:
+            #try:
+            if True:
                 # gen = makegen()
                 # gen.append_prompt(prompt, show = False)
 
@@ -257,24 +286,39 @@ class ζolver:
                 # gen.generate(temp, limit = 600, skip_check = True)
                 # outputs = [gen.new_output]
 
-                outputs = run_llm(model, tokenizer, prompt, max_tokens = 640, numseqs = 3, temp = temp, stopwords = ["```"])
-            except Exception as e:
-                # Could be a OOM
-                print("gen.generate() EXCEPTION")
-                print(e)
-                continue
+                outputs, outinfo = run_llm(model, tokenizer, prompt, max_tokens = 640, numseqs = 3, temp = temp, stopwords = ["```"])
+            # except Exception as e:
+            #     # Could be a OOM
+            #     print("gen.generate() EXCEPTION")
+            #     print(e)
+            #     # can't call self.scorelog.exception here
+            #     continue
 
-            for translation in outputs:
+            for idx, translation in enumerate(outputs):
                 print("-------Translation--------")
                 print(translation)
                 print("--------------------------")
 
+                logrow = self.scorelog.new_row()
+                logrow.translation = translation
+                logrow.prompt = "ζ" + PROMPT_VER
+                logrow.temperature = temp
+                logrow.gen_tokens = outinfo['gen_tokens'][idx]
+                logrow.transtime = outinfo['gen_time']
+
                 if time_left() < 5:
+                    logrow.result_info = "time_skipped"
+                    self.scorelog.log()
                     return
-                if self.try_translation(translation):
+
+                startt = time.time()
+                ret = self.try_translation(translation, logrow)
+                logrow.time = time.time() - startt
+                self.scorelog.log()
+                if ret:
                     return True  # FIXME
 
-    def try_translation(self, translation):
+    def try_translation(self, translation, logrow):
         try:
             workspace = ζ.dsl_parse.load_dsl(translation, verbose = False) # A ζ.solver.Workspace
             print("PARSE SUCCESS")
@@ -294,6 +338,9 @@ class ζolver:
             if ζ.dsl.is_a_constant(workspace.goal):
                 score = 0.8
                 info = "ζolve-constant"
+            logrow.answer = workspace.solution
+            logrow.score = score
+            logrow.result_info = info
             self.best, best_score, score_gap = self.scorelog.add_answer(workspace.solution, score, info)
             if (score_gap >= 6 or best_score >= 7): # and not VALIDATE:  ####FIXM
                 print("ζOLVE EARLY FINISH")
@@ -302,21 +349,24 @@ class ζolver:
         except NotImplementedError as e:
             print("-------ζOLVE FAILED: NotImplementedError")
             print(e)
+            self.scorelog.exception(e)
             #stats.unimp += 1
             #stats.solvefailed += 1
         except (SyntaxError, ζ.dsl.DSLError, ζ.ζ3.MalformedError) as e:
             print("-------ζOLVE FAILED")
             print(e)
+            self.scorelog.exception(e)
             #stats.solvefailed += 1
         except Exception as e:
             # Could be a OOM
             print("-------ζOLVE UNCAUGHT EXCEPTION")
             print(e)
+            self.scorelog.exception(e)
 
 
 if __name__ == '__main__':
     PROMPT_FILE = "prompt.txt"
-    ζol = ζolver("Solve THIS!")
+    ζol = ζolver("Solve THIS!", ScoreLog(1, log_path="log.csv"))
     class dummy_makegen:
         new_output = " Yes"
         def append_prompt(*args, **kwargs): pass

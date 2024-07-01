@@ -43,8 +43,8 @@ else:
 
 SLOW = True # = PRIVATE
 LOGGING = not PRIVATE
-#VALIDATE, DSET_TAG = "AMC_12_valid", "AMC12V"
-VALIDATE, DSET_TAG = "AIME_test24", "AIME24"
+VALIDATE, DSET_TAG = "AMC_12_valid", "AMC12V"
+#VALIDATE, DSET_TAG = "AIME_test24", "AIME24"
 MAX_DIFFICULTY = 5
 
 VLLM = False
@@ -62,16 +62,16 @@ if QUANT:  #Fits on one device
 
 
 USE_PAST_KEY = True
-SEED = 322
+SEED = 324
 #https://www.kaggle.com/code/voxelate/deepseek-math-7b-rl
 MODEL_PATH = "/kaggle/input/deepseek-math-7b-rl/deepseek-math"
 MISTRAL = False
 LLEMMA = False   # LLEMMA tokenizer
 RELOAD_MODEL = False   # For interactive run-all
 DEVICE = 'cuda' #if torch.cuda.is_available() else 'cpu'
-N_REPETITIONS = 3 if VALIDATE else (15 if SLOW else 1)   # 6
-MAX_SINGLE_GEN_TOKENS = 1000
-MAX_GEN_TOKENS = 1300 if SLOW else 500
+N_REPETITIONS = 3 if VALIDATE else (25 if SLOW else 1)   # 6
+MAX_SINGLE_GEN_TOKENS = 1400
+MAX_GEN_TOKENS = 1600 if SLOW else 500
 #MAX_TOKENS = 1500 if (P100 and USE_PAST_KEY) else 2048
 MAX_TOKENS = 2048
 
@@ -80,14 +80,14 @@ MODEL_PATH2 = '/kaggle/input/download-embeddedllm-mistral-7b-merge-14-v0-4/Embed
 #MODEL_PATH2 = '/kaggle/input/aimo-24-model-meta-math-metamath-mistral-7b'
 QUANT2 = False
 
-FIRSTPROB = 20  # ignored for PRIVATE
+FIRSTPROB = 0  # ignored for PRIVATE
 
 if PRIVATE:
     NPROBS = 50
-    TIME_LIMIT = 12720   # 3:32
+    TIME_LIMIT = 32000
 elif VALIDATE:
-    NPROBS = 13 #100
-    TIME_LIMIT = 8000
+    NPROBS = 10 #100
+    TIME_LIMIT = 3000
 else:
     NPROBS = 1  #10
     TIME_LIMIT = 450
@@ -114,7 +114,7 @@ P100 = (torch.cuda.device_count() == 1)
 if P100:
     SINGLE_GPU = True
 
-LOG_TAG = ""
+LOG_TAG = "ζv1-MMerge14+DSM"
 if FIRSTPROB:
     LOG_TAG += f"{FIRSTPROB}-{FIRSTPROB + NPROBS}"
 else:
@@ -913,7 +913,7 @@ prompt_options = [compute0, tool0, analy2] # 16
 prompt_options = [compute0, tool0, tool1, steps1, analy2]  #, elab0tool, ]
 prompt_options = [tool1, analy2] # 21, 17, X16
 prompt_options = [elab0tool, tool1]
-prompt_options = [tool1]
+#prompt_options = [tool1]
 #prompt_options = [tool1, elab0tool, compute0]   # for validation
 
 # %% [markdown]
@@ -1105,9 +1105,12 @@ class LLMGenerator:
 
 
 # %%
-if LOGGING:
-    logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'score', 'answer', 'result_info', 'gen_tokens', 'code_blocks', 'code_errors', 'time', 'bad'])
+import ζ.util
 
+if LOGGING:
+    logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'translation', 'temperature', 'score', 'answer', 'result_info', 'gen_tokens', 'code_blocks', 'code_errors', 'transtime', 'time', 'bad'])
+else:
+    logdf = None
 
 def predict(probi, problem):
 
@@ -1124,7 +1127,7 @@ def predict(probi, problem):
     time_for_item = time_left / max(1, NPROBS - probi)
     item_time_start = time.time()
 
-    scorelog = llm_prompting.ScoreLog()
+    scorelog = llm_prompting.ScoreLog(env.prob_id, logdf, LOG_NAME)
     
     # ζolve
     if True:
@@ -1132,29 +1135,34 @@ def predict(probi, problem):
             torch.cuda.empty_cache()
             gc.collect()
             # Remove part of first model (DeepSeek-Math-7b-rl) from GPU, only takes few seconds
-            move_model_layers_to(model, 'cpu', {'cuda:0':3900, 'cuda:1':3900})
-            move_model_layers_back(model2)
+            with ζ.util.Timer() as timing:
+                move_model_layers_to(model, 'cpu', {'cuda:0':3900, 'cuda:1':3900})
+            #print("Moved in", timing)
+            #move_model_layers_to(model, 'cpu', {'cuda:0':3900, 'cuda:1':3900})
+            with ζ.util.Timer() as timing:
+                move_model_layers_back(model2)
+            print("Moved in", timing)
             torch.cuda.empty_cache()
             gc.collect()
 
             def model2makegen():
                 return LLMGenerator(model2, tokenizer2, first_model = False)
 
-            ζol = llm_prompting.ζolver(problem)
+            ζol = llm_prompting.ζolver(problem, scorelog)
             #ζol = ζolver(problem)
-            solved = ζol.doit(model2, tokenizer2, model2makegen, timeout = min(time_for_item, 150), hard_timelimit = NOTEBOOK_START_TIME + TIME_LIMIT)
+            solved = ζol.doit(model2, tokenizer2, model2makegen, timeout = min(time_for_item, 300), hard_timelimit = NOTEBOOK_START_TIME + TIME_LIMIT)
             print(f"{int(time.time() - item_time_start)}s spent in ζolve()")
             best = ζol.best
-            scorelog = ζol.scorelog
             if solved:
                 return ζol.best
             
             # Fix occasional OOM
             move_model_layers_to(model2, 'cpu', {'cuda:0':800, 'cuda:1':800})
-        except Exception as e:
+        except RuntimeError:# as e:#Exception as e:
             print("UNCAUGHT EXCEPTION!!!!!!!!!!!!!!!!!!!!!!!")
             print(e)
 
+    return best
 
     move_model_layers_back(model)
 
@@ -1178,10 +1186,7 @@ def predict(probi, problem):
             time.sleep(0.2)
         
         if LOGGING:
-            global logdf
-            logrow = pd.DataFrame(columns = logdf.columns)
-            logrow.loc[len(logdf)] = 0
-            logrow.problem_id = env.prob_id
+            logrow = scorelog.new_row()
         
         last_code_error = None
         last_code_output = None
@@ -1498,8 +1503,7 @@ def predict(probi, problem):
             logrow.answer = result_output
             logrow.time = time.time() - it_start_time
             logrow.bad = bad
-            logdf = pd.concat([logdf, logrow])
-            logdf.to_csv(LOG_NAME)
+            scorelog.log()
 
         if result_output > -1:  # and not bad
             print(f"RESULT = {result_output} SCORE = {score}")
@@ -1526,8 +1530,8 @@ for probi, (test, sample_submission) in enumerate(iter_test):
     transformers.set_seed(SEED)
     sample_submission['answer'] = predict(probi, test['problem'].values[0])
     #print(f"Making prediction for ""{test[:100]}"": {sample_submission}")
-    with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True): #, enable_cudnn=True ):
-        env.predict(sample_submission)
+    #with torch.backends.cuda.sdp_kernel(enable_flash=True, enable_math=True, enable_mem_efficient=True): #, enable_cudnn=True ):
+    env.predict(sample_submission)
 
 # %%
 if not PRIVATE:
@@ -1537,6 +1541,10 @@ if not PRIVATE:
     print(env.df)
     score = (env.df.ground_truth == env.df.answer).sum()
     print(f'{score} matches in {len(env.df)} examples')
+
+# %%
+!rm -f LOGFILE.zip
+!zip LOGFILE.zip "$LOG_NAME"
 
 # %%
 if False:
