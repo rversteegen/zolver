@@ -1106,11 +1106,10 @@ class LLMGenerator:
 
 # %%
 import ζ.util
+from llm_prompting import AnswerLog
 
 if LOGGING:
-    logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'translation', 'temperature', 'score', 'answer', 'result_info', 'gen_tokens', 'code_blocks', 'code_errors', 'transtime', 'time', 'bad'])
-else:
-    logdf = None
+    AnswerLog.log_path = LOG_NAME
 
 def predict(probi, problem):
 
@@ -1127,7 +1126,7 @@ def predict(probi, problem):
     time_for_item = time_left / max(1, NPROBS - probi)
     item_time_start = time.time()
 
-    scorelog = llm_prompting.ScoreLog(env.prob_id, logdf, LOG_NAME)
+    answerlog = AnswerLog(env.prob_id)
     
     # ζolve
     if True:
@@ -1148,7 +1147,7 @@ def predict(probi, problem):
             def model2makegen():
                 return LLMGenerator(model2, tokenizer2, first_model = False)
 
-            ζol = llm_prompting.ζolver(problem, scorelog)
+            ζol = llm_prompting.ζolver(problem, answerlog)
             #ζol = ζolver(problem)
             solved = ζol.doit(model2, tokenizer2, model2makegen, timeout = min(time_for_item, 300), hard_timelimit = NOTEBOOK_START_TIME + TIME_LIMIT)
             print(f"{int(time.time() - item_time_start)}s spent in ζolve()")
@@ -1184,9 +1183,8 @@ def predict(probi, problem):
             torch.cuda.empty_cache()
             gc.collect()
             time.sleep(0.2)
-        
-        if LOGGING:
-            logrow = scorelog.new_row()
+
+        logrow = answerlog.new_row()
         
         last_code_error = None
         last_code_output = None
@@ -1214,8 +1212,7 @@ def predict(probi, problem):
 
             promptname, prompt, assist = prompt_options[(firstprompt+jj) % len(prompt_options)]  #random.choice(prompt_options)
             print("prompt", promptname)
-            if LOGGING:
-                logrow.prompt = promptname
+            logrow.prompt = promptname
             gen.user_prompt(prompt.format(problem), assist)
             gen.generate(temperature, top_p)
             
@@ -1336,9 +1333,8 @@ def predict(probi, problem):
                             #print('<<<<<CODE RESULTS\n' + code_output + ">>>>>")
 
                             code_blocks += 1
-                            if LOGGING:
-                                if not code_status:
-                                    logrow.code_errors += 1
+                            if not code_status:
+                                logrow.code_errors += 1
 
                             if code_status == True:
                                 code_error_count = 0
@@ -1491,11 +1487,11 @@ def predict(probi, problem):
         except Exception as e:   
             print("predict() EXCEPTION")
             print(e)
+            logrow.exception(e)
             #result_output = -1
             bad = 2
         
         if LOGGING:
-            # ['problem_id', 'prompt', 'score', 'answer', 'result_info', 'gen_tokens', 'code_errors', 'time'])
             logrow.result_info = result_info
             logrow.gen_tokens = gen.num_gen_tokens
             logrow.code_blocks = code_blocks
@@ -1503,11 +1499,10 @@ def predict(probi, problem):
             logrow.answer = result_output
             logrow.time = time.time() - it_start_time
             logrow.bad = bad
-            scorelog.log()
+            answerlog.log()
 
         if result_output > -1:  # and not bad
-            print(f"RESULT = {result_output} SCORE = {score}")
-            best, best_score, score_gap = scorelog.add_answer(result_output, score, result_info)
+            best, best_score, score_gap = answerlog.add_answer(result_output, score, result_info)
 
             #if best_score >= 3 and best_score >= 1 + (jj+1)/2:
             #if best_score > 4 and not VALIDATE:
@@ -1515,7 +1510,7 @@ def predict(probi, problem):
                 print("EARLY FINISH!")
                 break
 
-    print("\nAll outputs:", scorelog.outputs)
+    print("\nAll outputs:", answerlog.outputs)
     return best
 
 

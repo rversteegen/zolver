@@ -196,64 +196,96 @@ goal = min(x)"""] * numseqs, {'gen_tokens':[10] * numseqs, 'gen_time':1.0}
 ################################################################################
 ## 
 
-class ScoreLog:
-    "Collection of scores for a single problem"
-    def __init__(self, prob_id, logdf = None, log_path = None):
-        self.outputs = []  # List of (answer, score, info) tuples
+class LogRow(dict):
+    def __getattr__(self, attr):
+        if attr in self:
+            return self[attr]
+        return 0
+
+    def __setattr__(self, attr, value):
+        self[attr] = value
+
+
+class AnswerLog:
+    """The AnswerLog class holds a log of all attempts at solving all problems,
+    and is used for logging to a .json file.
+    An AnswerLog instance holds all the answers produced for a single problem,
+    and is used to tally scores and pick the best answer.
+    """
+
+    # Class members
+    log_rows : list[LogRow] = []
+    log_path : str
+
+    def __init__(self, prob_id):
         self.answer_scores = defaultdict(int)  # answer -> total_score
-        if logdf is not None:
-            self.logdf = logdf
-        else:
-            self.logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'translation', 'temperature', 'score', 'answer', 'result_info', 'gen_tokens', 'transtime', 'time', 'error'])
-        self.log_path = log_path
+        self.outputs = []  # List of (answer, score, info) tuples
+
+        # if AnswerLog.logdf is None:
+        #     AnswerLog.logdf = pd.DataFrame(columns = ['problem_id', 'prompt', 'translation', 'temperature', 'score', 'answer', 'result_info', 'gen_tokens', 'code_blocks', 'code_errors', 'transtime', 'time', 'bad', 'error'])
         self.problem_id = prob_id
         self.logrow = None
 
+    def __del__(self):
+        self.log()
+
     def new_row(self):
-        self.logrow = pd.DataFrame(columns = self.logdf.columns)
-        self.logrow.loc[0] = 0
-        self.logrow.problem_id = self.problem_id
+        "Called at the start of each new attempt"
+        self.log()
+        self.logrow = LogRow(problem_id = self.problem_id)
+        AnswerLog.log_rows.append(self.logrow)
         return self.logrow
+
+        # #AnswerLog.logdf = pd.concat([AnswerLog.logdf, self.logrow], ignore_index = True)
+        # AnswerLog.logdf.loc[-1] = {'problem_id': self.problem_id}
+        # AnswerLog.logdf = AnswerLog.logdf.reset_index(drop = True)
+        # self.logrow = AnswerLog.logdf.loc[-1] #pd.DataFrame(columns = AnswerLog.logdf.columns)
+
+        # return self.logrow
 
     def add_answer(self, answer, score, result_info):
         print(f"RESULT = {answer} SCORE = {score}")
-        answer = int(round(answer)) % 1000
+        self.logrow.answer = answer
+        self.logrow.score = score
+        self.logrow.result_info = result_info
         self.outputs.append((answer, score, result_info))
+
+        answer = int(round(answer)) % 1000
+
         self.answer_scores[answer] += max(0, score)
 
-        if len(self.outputs) > 0:
-            answers = [(score,ans) for (ans,score) in self.answer_scores.items()]
-            answers.sort(reverse = True)
-            print("SCORES,ANSWERS:", answers)
-            best_score, best = answers[0]
-            if len(answers) >= 2:
-                score_gap = best_score - answers[1][0]
-            else:
-                score_gap = best_score
-            return best, best_score, score_gap
+        answers = [(score,ans) for (ans,score) in self.answer_scores.items()]
+        answers.sort(reverse = True)
+        print("SCORES,ANSWERS:", answers)
+        best_score, best = answers[0]
+        if len(answers) >= 2:
+            score_gap = best_score - answers[1][0]
+        else:
+            score_gap = best_score
+        return best, best_score, score_gap
 
     def log(self, **data):
         for key, val in data.items():
             self.logrow[key] = val
-        self.logdf = pd.concat([self.logdf, self.logrow], ignore_index = True)
-        self.logdf.to_csv(self.log_path)
-        self.logrow = None
+        if AnswerLog.log_path:
+            AnswerLog.log_rows.dump(open(AnswerLog.log_path, "w"))
+        #AnswerLog.logdf.to_csv(self.log_path)
 
     def exception(self, e):
         self.logrow.error = f"{e.__class__.__name__}: {e}"
 
 
 class ζolver:
-    def __init__(self, problem, scorelog, multiprocessing = None, maxlength = 10000):
+    def __init__(self, problem, answerlog, multiprocessing = None, maxlength = 10000):
         self.maxlength = maxlength
         self.problem = problem
-        self.scorelog = scorelog
+        self.answerlog = answerlog
         self.best = 0
         self.multiprocessing = multiprocessing
 
     def doit(self, model, tokenizer, makegen, timeout = 180, hard_timelimit = None):
         """
-        Returns true if definitively solved, otherwise rsulsts in scorelog.
+        Returns true if definitively solved, otherwise rsulsts in answerlog.
         hard_timelimit: timestamp must finish before
         """
         start_time = time.time()
@@ -291,7 +323,7 @@ class ζolver:
             #     # Could be a OOM
             #     print("gen.generate() EXCEPTION")
             #     print(e)
-            #     # can't call self.scorelog.exception here
+            #     # can't call self.answerlog.exception here
             #     continue
 
             for idx, translation in enumerate(outputs):
@@ -299,7 +331,7 @@ class ζolver:
                 print(translation)
                 print("--------------------------")
 
-                logrow = self.scorelog.new_row()
+                logrow = self.answerlog.new_row()
                 logrow.translation = translation
                 logrow.prompt = "ζ" + PROMPT_VER
                 logrow.temperature = temp
@@ -308,13 +340,11 @@ class ζolver:
 
                 if time_left() < 5:
                     logrow.result_info = "time_skipped"
-                    self.scorelog.log()
                     return
 
                 startt = time.time()
                 ret = self.try_translation(translation, logrow)
                 logrow.time = time.time() - startt
-                self.scorelog.log()
                 if ret:
                     return True  # FIXME
 
@@ -341,7 +371,7 @@ class ζolver:
             logrow.answer = workspace.solution
             logrow.score = score
             logrow.result_info = info
-            self.best, best_score, score_gap = self.scorelog.add_answer(workspace.solution, score, info)
+            self.best, best_score, score_gap = self.answerlog.add_answer(workspace.solution, score, info)
             if (score_gap >= 6 or best_score >= 7): # and not VALIDATE:  ####FIXM
                 print("ζOLVE EARLY FINISH")
                 return True
@@ -349,28 +379,29 @@ class ζolver:
         except NotImplementedError as e:
             print("-------ζOLVE FAILED: NotImplementedError")
             print(e)
-            self.scorelog.exception(e)
+            self.answerlog.exception(e)
             #stats.unimp += 1
             #stats.solvefailed += 1
         except (SyntaxError, ζ.dsl.DSLError, ζ.ζ3.MalformedError) as e:
             print("-------ζOLVE FAILED")
             print(e)
-            self.scorelog.exception(e)
+            self.answerlog.exception(e)
             #stats.solvefailed += 1
         except Exception as e:
             # Could be a OOM
             print("-------ζOLVE UNCAUGHT EXCEPTION")
             print(e)
-            self.scorelog.exception(e)
+            self.answerlog.exception(e)
 
 
 if __name__ == '__main__':
     PROMPT_FILE = "prompt.txt"
-    ζol = ζolver("Solve THIS!", ScoreLog(1, log_path="log.csv"))
+    AnswerLog.log_path = "log.csv"
+    ζol = ζolver("Solve THIS!", AnswerLog(1))
     class dummy_makegen:
         new_output = " Yes"
         def append_prompt(*args, **kwargs): pass
         def generate(*args, **kwargs): pass
 
     ζol.doit(None, None, dummy_makegen, 60)
-    print(ζol.scorelog.outputs, ζol.best)
+    print(ζol.answerlog.outputs, ζol.best)
