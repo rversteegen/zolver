@@ -114,5 +114,46 @@ def run_llm(model, tokenizer, prompt, max_tokens = 800, numseqs = 1, temp = 0.9,
     return out_text, info
 
 
+def module_size(mod):
+    "Size of the parameters of a Pytorch Module (e.g. a Transformer layer) in bytes"
+    return sum(param.numel() * param.itemsize for param in mod.parameters())
+
+def move_model_params_to(model, device = 'cpu', MB = {'cuda:0':1500, 'cuda:1':1500}):
+    """Move some of the modules of a Pytorch model from the devices listed in the keys of `MB` to `device`.
+    Moves parameter tensors until at least the number of megabytes of memory given in `MB` have been freed.
+    If called repeatedly will keep moving more.
+    The model will be unusable until it's reloaded with move_model_params_back()."""
+    moved = defaultdict(int)
+    # Iterate .modules() rather than .parameters() because the Tensor.to() method doesn't act in-place
+    #for name, mod in model.named_modules():
+    for mod in model.modules():
+        # This is a depth-first search, so only move leaf Modules to prevent double-counting.
+        # Alternatively could restrict to modules named "model.layers.##":
+        #if re.match('^lm_head|model.embed_tokens|model.layers.\d+$', name):
+        if next(mod.children(), None) is None:  # Has no children
+            firstparams = next(mod.parameters(), None)
+            if firstparams is None:
+                continue  # No parameters, e.g. a rotary_emb Module
+            olddevice = str(firstparams.device)  # There isn't a mod.device attribute
+            if moved.get(olddevice, 0) >= MB.get(olddevice, 0) * 2**20:
+                continue
+            #print(f"Moving {name} from {olddevice}")
+            mod._former_device = olddevice  # Save for move_model_params_back()
+            mod.to(device)
+            moved[olddevice] += module_size(mod)
+    print("Moved", {dev: int(amnt/2**20) for (dev,amnt) in moved.items()}, "MB to", device)
+
+def move_model_params_back(model):
+    "Undoes move_model_params_to()."
+    moved = defaultdict(int)
+    for name, mod in list(model.named_modules()):
+        if hasattr(mod, '_former_device'):
+            olddevice = str(next(mod.parameters()).device)
+            #print(f"Moving {name} from {olddevice} to {mod._former_device}")
+            moved[mod._former_device] += module_size(mod)
+            mod.to(mod._former_device)
+            del mod._former_device
+    print("Moved", {dev: int(amnt/2**20) for (dev,amnt) in moved.items()}, "MB back")
+
 if __name__ == '__main__':
     output, outinfo = run_llm(model2, tokenizer2, "To sum two numbers:\n```\n", 60, numseqs = 2, trim_stop = True)
