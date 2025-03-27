@@ -13,7 +13,7 @@ AIMO = False
 class Workspace:
     def __init__(self):
         self.variables = {}
-        self.facts = []
+        self.constraints = []
         self.goal = None
         # This is the namespace (locals dict) for the executing DSL script
         self.locals = {}
@@ -21,7 +21,7 @@ class Workspace:
 
     def print(self):
         print("vars:", self.variables)
-        print("facts:", self.facts)
+        print("constraints:", self.constraints)
         print("goal:", self.goal)
 
     def finish_parse(self):
@@ -70,7 +70,7 @@ class Workspace:
             # Not needed
             # for varname, var in variables.items():
             #     sol.add_variable(var)
-            for fact in self.facts:
+            for fact in self.constraints:
                 try:
                     sol.add_constraint(fact)
                 except NotImplementedError as e:

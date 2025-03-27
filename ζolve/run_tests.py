@@ -13,16 +13,34 @@ for dirpath, dirnames, filenames in os.walk(rootdir + 'tests'):
         if fname.endswith('.py'):
             testfiles.append(os.path.join(dirpath, fname).replace(rootdir, ''))
 
-# testfiles = [
+testfiles = [               # 
+"tests/valid_dsl/set_comp.py",
+"tests/valid_dsl/constraints_on_inst_elements.py",
 #     #"examples/AIMO_example4.py"
-#     # "tests/valid_dsl/count-734.py"
-#     # "tests/valid_dsl/count-simple.py"
-#     "tests/valid_dsl/forall.py",
-#     "tests/valid_dsl/forall2.py",
-#     "tests/valid_dsl/forall3.py",
-#     "tests/valid_dsl/forall4.py",
-# ]
+       "tests/valid_dsl/count-734.py",
+# "tests/valid_dsl/count_interval.py",
+# "tests/valid_dsl/count-simple.py",
 
+
+# #    "tests/valid_dsl/setcomps.py",
+
+#     # "tests/valid_dsl/set_min_with_constraints.py",
+#     # "tests/valid_dsl/max_vacant_set.py",
+#     "tests/valid_dsl/max_empty_set.py",
+
+  "tests/valid_dsl/seqdecl.py",
+  "tests/valid_dsl/sumints.py",
+]
+
+testfiles = [
+ "tests/valid_dsl/seq_sum.py",
+ "tests/valid_dsl/len_resolved_later.py",
+]
+
+# testfiles = [
+# # "tests/valid_dsl/count-simple.py",
+#  "tests/valid_dsl/count_range.py",
+# ]
 skips = [
 "tests/valid_dsl/more_than_once.py",
     "tests/valid_dsl/setcomps.py",

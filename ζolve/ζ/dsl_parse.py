@@ -42,6 +42,12 @@ def makeCall(name, args = [], keywords = [], copyloc = None):
 
 class ASTTransform(sympy.parsing.ast_parser.Transform):
 
+    def __init__(self, local_dict, global_dict, lineno):
+        super().__init__(local_dict, global_dict)
+        self.bound_vars = {}  # name -> name of replacement symbol
+        self.lineno = lineno
+        self.undefined_names = set()
+
     # TODO: -> Tuple
 
     # def __init__(self, *args):
@@ -79,6 +85,7 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
         return dummy_name
 
     def visit_comprehension(self, node, make_seq = False):
+        "A list or set comprehension/generator expression, translated to set/seq_generator()"
         # elt: the expression
         # -> set_generator(elt, var_names_types_dict, make_seq, constraints)
         args = [node.elt]
@@ -97,9 +104,9 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
             ifs += gen.ifs
 
         args.append(ast.Dict(vars, vartypes))
-        args.append(ast.Constant(make_seq))
         args += ifs
-        ret = makeCall('set_generator', args, copyloc=node)
+        funcname = 'seq_generator' if make_seq else 'set_generator'
+        ret = makeCall(funcname, args, copyloc=node)
         #print("MAKE SET:\n", ast.dump(ret, indent=4))
         # Recurse with bindings
         ret = self.generic_visit(ret)
@@ -133,6 +140,7 @@ class ASTTransform(sympy.parsing.ast_parser.Transform):
             print("-=-------- PARSE", node)
             return node
         else:
+            self.undefined_names.add(node.id)
             return node
             # return ast.fix_missing_locations(
             #     ast.Call(func=ast.Name('declarevar', ast.Load()),
@@ -232,9 +240,7 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
         ex = SyntaxError(f"{e}, line {lineno}:  '{string}'")
         ex.lineno = lineno
         raise ex
-    transformer = ASTTransform(local_dict, global_dict)
-    transformer.bound_vars = {}  # name -> name of replacement symbol
-    transformer.lineno = lineno
+    transformer = ASTTransform(local_dict, global_dict, lineno)
     a = transformer.visit(a)
     if AST_DEBUG:
         print("REWRITTEN:\n", ast.dump(a, indent=4, include_attributes = include_attributes))
@@ -248,13 +254,15 @@ def parse_and_eval_dsl(string, local_dict, global_dict = global_namespace, mode 
                     #print("GOT", ret)
                     return ret
         except NameError as e:
-            print(e)
             m = re.search("'(\w+)' is not defined", str(e))
             if m:
                 name = m.group(1)
-                print("Trying to fix name error...")
-                global_dict['declarevar'](name, "Int" if name in "ijn" else def_Type)
-                continue
+                # Check this exception isn't thrown in some called function
+                if name in transformer.undefined_names:
+                    print(e)
+                    print("Trying to fix name error...")
+                    global_dict['declarevar'](name, "Int" if name in "ijn" else def_Type)
+                    continue
             raise
         except NotImplementedError:
             raise
@@ -439,7 +447,7 @@ def load_dsl(script, verbose = True):
     print("FINISH_PARSE:::")
     # Check the goal
     workspace.finish_parse()
-    print("PARSE DONE ::::::")
+    print("PARSE_DONE ::::::")
 
     return workspace
 

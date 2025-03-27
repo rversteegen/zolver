@@ -152,36 +152,39 @@ def seq(start, end, *args, **kwargs):
 
 class ζcount(sympy.Basic):
     "count()"
-    is_number = True
+    is_extended_nonnegative = True
+    is_integer = True
     kind = NumberKind
 
     def __new__(cls, *args):
         # TODO: if passed a list/tuple rather than a comprehension, count all
         # tuples of assignments to those expressions
         # TODO: iterables
-        if len(args) == 1:
-            arg = args[0]
-            #print(f"got {arg}: {str(type(arg))}")
-            if type(arg).__name__ == 'generator':
-                assert False, "remaining generator!"
-                #arg = list(arg)
-
-            if isinstance(arg, SetObject):
-                # Maybe shortcut eval
-                length = arg.len()
-                print(f"count() ctor tried to eval {arg}, got {length}")
-                if length is not None:
-                    return Integer(length)
-
-            if isinstance(arg, (list, tuple, set)):
-                # If all args are numbers, can eval
-                if all(is_a_constant(item) for item in arg):
-                    print(f"count() ctor eval constant list({args}) to {len(arg)}!!")
-                    return Integer(len(arg))
-            #raise DSLError("count() argument not understood: " + str(arg))
-            return Basic.__new__(cls, *args)
-        else:
+        if len(args) != 1:
             raise DSLError("count() arguments not understood: " + str(args))
+
+        arg = args[0]
+        #print(f"got {arg}: {str(type(arg))}")
+        if type(arg).__name__ == 'generator':
+            assert False, "remaining generator!"
+            #arg = list(arg)
+
+        if isinstance(arg, SetObject):
+            # Maybe shortcut eval
+            # length = arg.eval_size()
+            # print(f"count() ctor tried to eval {arg}, got {length}")
+            # if length is not None:
+            #     return Integer(length)
+            if arg.size is not None:
+                return arg.size
+
+        if isinstance(arg, (list, tuple, set)):
+            # If all args are numbers, can eval
+            if all(is_a_constant(item) for item in arg):
+                print(f"count() ctor eval constant list({args}) to {len(arg)}!!")
+                return Integer(len(arg))
+        #raise DSLError("count() argument not understood: " + str(arg))
+        return Basic.__new__(cls, *args)
 
     def is_constant(self):
         return False
@@ -189,16 +192,22 @@ class ζcount(sympy.Basic):
 count = ζcount
 
 
-def reify_collection(seq, sort = False):
+def reify_collection(seq, sort = False, name = "Combination op"):
     if isinstance(seq, (list,tuple,set)):
         seq = list(seq)
         if sort:
             seq = sorted(seq)
         return seq
-    elif isinstance(seq, SetObject):
-        elements = seq.inst_element_list()
+    elif isinstance(seq, SetObject):  # or SeqObject
+        elements, reason = seq.inst_element_list()
         if elements is None:
-            raise NotImplementedError("Combination op on a set/seq with unknown length")
+            # if seq.length is None:
+            #     raise NotImplementedError(name + " of a set/seq with unknown length")
+            # if seq.length is oo:
+            #     raise NotImplementedError(name + " of a set/seq with unbounded length")
+            # Even if no expression is known for the set/seq, should have gotten a list
+            #assert False
+            raise NotImplementedError(name + " of a set/seq with " + reason)
         if sort:
             # Set vars may be automatically sorted
             if seq.elements_are_sorted == False:
@@ -210,7 +219,7 @@ def reify_collection(seq, sort = False):
                 except TypeError:
                     pass    # Can't compare
                 # This can be done by adding yet more variables
-                raise NotImplementedError("Returning sorted elements")
+                raise NotImplementedError(name + ": Returning sorted elements")
         return elements
     else:
         assert False, "reify_collection strange arg: " + str(seq)
@@ -220,28 +229,28 @@ def reify_collection(seq, sort = False):
 #Product = sympy.product
 # But there's no similar sympy.sum!
 
-def reify_collection_or_args(args):
+def reify_collection_or_args(args, **kwargs):
     if len(args) == 1 and isinstance(args[0], SetObject):
-        return reify_collection(args[0])
+        return reify_collection(args[0], **kwargs)
     return args_or_iterable(args)
 
 def product(*args):
-    elements = reify_collection_or_args(args)
+    elements = reify_collection_or_args(args, name = "product")
     return sympy.product(*elements)
 
 def summation(*args):
     # TODO: series sums
-    elements = reify_collection_or_args(args)
-    print("sum: got elmenets", elements)
+    elements = reify_collection_or_args(args, name = "sum")
+    print("sum: got elements", elements)
     return sympy.Add(*elements)
 
 def average(*args):
-    elements = reify_collection_or_args(args)
-    print("average: got elmenets", elements)
+    elements = reify_collection_or_args(args, name = "average")
+    print("average: got elements", elements)
     return sympy.Add(*elements) / len(elements)
 
 def median(seq):
-    elements = reify_collection(seq, sort = True)
+    elements = reify_collection(seq, sort = True, name = "median")
     # What if even??
     middle = len(elements) // 2
     if len(elements) % 2:
@@ -261,18 +270,25 @@ def range_args(args):
         step = args.pop(0)
     return start, end, step
 
-dummy_idx = 1
+dummy_idx = 0
+
+def dummy_name(name_prefix):
+    global dummy_idx
+    dummy_idx += 1
+    return name_prefix + str(dummy_idx)
 
 def range_seq(*args):
+    "range() function"
     start, end, step = range_args(list(args))
-    idx = declarevar('idx' + str(dummy_idx), Int)
-    gen = set_generator(start + idx * step, {idx.name: Int}, True, idx < (end - start))
+    idx = declarevar(dummy_name('idx'), Int)
+    gen = seq_generator(start + idx * step, {idx.name: Int}, idx >= 0, idx < (end - start))
     gen.length = end - start
     return gen
 
 def rangep1_seq(*args):
+    "seq() function"
     start, end, step = range_args(list(args))
-    return range(start, end + 1, step)
+    return range_seq(start, end + 1, step)
 
 # TODO: sympy.Abs returns a UndefinedKind, they prehaps forgot to implement it
 

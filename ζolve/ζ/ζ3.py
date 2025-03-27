@@ -163,7 +163,7 @@ class SympyToZ3:
 
         # FIXME: Symbol properties are ignores, therefore we translate Nat and Real the same!
 
-        Type = dsl.get_type_of_expr(sym)
+        Type = dsl.get_Type_of_expr(sym)
 
         if Type == dsl.Bool:
             z3var = Bool(sym.name)
@@ -198,7 +198,7 @@ class SympyToZ3:
         assert isinstance(node.args[1], dsl.SetObject), "not set obj!"
         elmt = self.to_z3(node.args[0])
         setobj = node.args[1]
-        elements = setobj.inst_element_list(tryagain = True)  # calls try_eval()
+        elements, _ = setobj.inst_element_list(tryagain = True)  # calls try_eval()
         if elements is not None:
             #print(type(self.to_z3(elements[0])), type(elmt))
             return Or([self.to_z3(el) == elmt for el in elements])
@@ -219,8 +219,8 @@ class SympyToZ3:
             #raise NotImplementedError("containment in an unbounded set/seq")
 
 
-    def count_to_z3(self, node : dsl.ζcount):
-        "CAN ONLY BE A GOAL"
+    def count_goal_to_z3(self, node : dsl.ζcount):
+        "Translate a count() goal."
         # If counting a Seq/Set, translate it
         # Strip the count()
         if len(node.args) > 1:
@@ -231,27 +231,30 @@ class SympyToZ3:
             setobj = node.args[0]
             # NOTE: this can add more constraints to the workspace for new variables
             # which is ok since ζ3_solve() hasn't sent them to us yet.
-            # This deals with .partial_elements.
-            setobj.try_eval(tryagain = True)
-            if setobj.length is not None:
-                return self.to_z3(setobj.length)
+            # This converts any .partial_elements into .evaluated elements...
+            # TODO: .evaluated elements aren't used!
+            size = setobj.size_expr()
+            if size:
+                print("ζ3: reduced count() to expr:", size)
+                return '', self.to_z3(size)
             if setobj.partial_elements:
-                print("Warning. Ignoring partial_elements")  # Probably harmless.
+                print("count_goal_to_z3; WARNING: Ignoring partial_elements")  # Probably harmless.
             # generator?
             if setobj.expr is None:
                 # TODO! Just find solutions
                 raise NotImplementedError("Can't count an undefined set/seq")
                 #self.finite_count = True
             else:
-                # Count the expression with its bound vars directly, subject to the constraints
+                # Count values of the genexpr, with its bound vars directly, subject to the constraints
                 setobj.add_constraints_for_expression()
-                return self.to_z3(setobj.expr)
+                return 'count', self.to_z3(setobj.expr)
 
         else:
             if not isinstance(node.args[0], sympy.Basic):
-                raise dsl.DSLError("count() with non-sym arg: " + str(node.args))
+                raise dsl.DSLError("count() with non-symbolic arg: " + str(node.args))
             node = node.args[0]
-            return self.to_z3(node)
+            # Count values of the expression
+            return 'count', self.to_z3(node)
 
     def minmax_to_z3(self, node, optname, minmax_of_values):
         "node is in min_types or max_types"
@@ -266,7 +269,7 @@ class SympyToZ3:
             # NOTE: this can add more constraints to the workspace for new variables
             # which is ok since ζ3_solve() hasn't sent them to us yet.
             # This deals with .partial_elements.
-            elements = setobj.inst_element_list(tryagain = True)  # calls try_eval()
+            elements, _ = setobj.inst_element_list(tryagain = True)  # calls try_eval()
             if elements is not None:
                 # Each individual element has its type processed into constraints
                 print("got elements", elements)
@@ -491,7 +494,6 @@ class Z3Solver():
         self.solutions = set()
 
         self.trans = SympyToZ3(self)
-        print("goal is", repr(goal))
         if isinstance(goal, dsl.max_types):  # in fact type(dsl.max(...)) == dsl.max !
             self.goal_func = 'max'
             self.goal = self.trans.to_z3(goal)
@@ -506,8 +508,8 @@ class Z3Solver():
             self.goal_func = ''
 
             if isinstance(goal, dsl.ζcount):
-                self.goal_func = 'count'
-                self.goal = self.trans.count_to_z3(goal)
+                # Tries to reduce to an expression, otherwise goal_func = 'count'
+                self.goal_func, self.goal = self.trans.count_goal_to_z3(goal)
             else:
                 self.goal = self.trans.to_z3(goal)
 
@@ -534,10 +536,12 @@ class Z3Solver():
     def add_constraint(self, spexp: sympy.Expr):
         self.sol.add(self.trans.to_z3(spexp))
 
-    def find_one_solution(self, blockit = False, v = True):
+    def find_one_solution(self, blockit = False, v = True, goal = None):
         """Returns sat, unsat or unknown and appends to self.solutions.
         If blockit, blocks the solution.
         """
+        if goal is None:
+            goal = self.goal
         if v:
             print("z3 solver =\n", self.sol)
         if not self.solutions:
@@ -552,12 +556,12 @@ class Z3Solver():
 
         m = self.sol.model()
 
-        soln = m.eval(self.goal, model_completion = True)
+        soln = m.eval(goal, model_completion = True)
         if blockit:
-            self.sol.add(self.goal != soln)
+            self.sol.add(goal != soln)
         if v:
             print("z3 model() =", m)
-            print(self.goal, " evaluated to ", soln)
+            print(goal, " evaluated to ", soln)
         soln = num_to_py(soln)
         assert soln not in self.solutions, "z3 returned same solution twice"
         self.solutions.add(soln)
@@ -588,6 +592,9 @@ class Z3Solver():
             elif ret == unsat:
                 print(f"Found {len(self.solutions)} solutions: { list(self.solutions)[:40] }")
                 self.solutions = {len(self.solutions)}
+                with open("lastprob.smt2", "w") as ofile:
+                    ofile.write(self.sol.to_smt2())
+
                 return solved
             else:
                 assert False, "Bad ret"
@@ -775,9 +782,6 @@ class Z3Solver():
             # Try to use elim-predicates which is not currently [2023] used in standard preprocessing
             #sol = Then('simplify', 'elim-predicates', 'smt').solver()
             #sol.set('timeout', 3000)  # ms
-
-            # Useful solver for various quantified fragments
-            #self.sol = Tactic('qsat').solver()
 
 
         # Disable MBQI and use just E-matching

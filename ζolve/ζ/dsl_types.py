@@ -1,11 +1,17 @@
 """
 DSL types and type helper functions used in dsl.py but which don't want to live in that pollution.
 """
-from sympy.series.sequences import SeqExpr
+from typing import Optional, Tuple, Union as tyUnion
+
 import sympy
+from sympy import oo
 from sympy.core import BooleanKind, NumberKind, UndefinedKind
+from sympy.core.numbers import Infinity, NegativeInfinity
 from sympy.sets.sets import SetKind
+from sympy.series.sequences import SeqExpr, SeqBase
+
 from ζ import dsl  # for _ctx context only
+
 
 NotSymbolicKind = "NotSymbolicKind"
 SeqKind = "SeqKind"
@@ -33,12 +39,31 @@ Bool = "Bool"
 Int = "Int"
 Real = "Real"
 Rat = "Real"   # TODO
-Rational = "Real"
 Complex = "Complex"
 Nat = "Nat"
 Nat0 = "Nat0"
 
-Sym = sympy.Symbol
+# These are the valid values for var_type and element_type.
+BasicTypes = Int, Real, Rat, Complex, Nat, Nat0
+
+def Type_is_number(Type) -> bool:
+    return Type in BasicTypes
+
+def Type_to_Set(Type) -> sympy.Set:
+    "For BasicTypes"
+    if Type == dsl.Int:
+        return sympy.Integers
+    elif Type == dsl.Rat:
+        return sympy.Rationals  # ???  TODO
+    elif Type == dsl.Real:
+        return sympy.Reals
+    elif Type == dsl.Complex:
+        return sympy.Complexes
+    elif Type == dsl.Nat:
+        return sympy.Naturals
+    elif Type == dsl.Nat0:
+        return sympy.Naturals0
+    return Type
 
 
 class TypeClass:
@@ -57,21 +82,24 @@ class TypeClass:
     def __str__(self):
         return f"Type:{self.__class__.__name__}({self.element_type}, len={self.length})"
 
+
 # Type name, not an Seq object, which is a SeqConstructor
-class Seq(TypeClass):
+class SeqType(TypeClass):
     is_Seq = True
 
     def make_sym(self, name):
         # TODO: allow recursive element_types Seq(Seq(...))
-        return make_seq_symbol(name, self.element_type, self.length)
+        return uninterpreted_seq(name, self.element_type, self.length)
+
 
 # Type name, not an Seq object, which is a SeqConstructor
-class Set(TypeClass):
+class SetType(TypeClass):
     def make_sym(self, name):
         # TODO: allow recursive element_types Seq(Seq(...))
-        return make_set_symbol(name, self.element_type, self.length)
+        return uninterpreted_set(name, self.element_type, self.length)
 
-class Function(TypeClass):
+
+class FunctionType(TypeClass):
     arg_types = None
 
     def __init__(self, arg_types, return_type = Real, len = None, **assumptions):
@@ -155,7 +183,7 @@ class Function(TypeClass):
 class ζSymbol(sympy.Symbol):
     "Allow adding custom attributes, since Symbol has __slots__."
     var_type = None  # A Type tag
-    var_in_set = None  # The SetObject to which it belongs. Set only if 
+    member_of = None  # The sympy.Set or SetObject to which it belongs. Set only for bound vars in generators
     kind = NumberKind  # By default, overridden
 
 class ζSetSymbol(sympy.Symbol):
@@ -163,37 +191,149 @@ class ζSetSymbol(sympy.Symbol):
     kind = SetKind
 
 
-def get_type_iterator(sym, constraints):
+def find_var_bounds(sym, constraints) -> Tuple[sympy.Set, bool]:
+    """Search a set of constraints to try to determine possible values of a variable,
+    Returns a sympy.Set, probably a Union of Ranges or Intervals.
+    """
+    # This function is typically used on bound generator variables. Unbound
+    # variables can also have .member_of from a Contains constraint.
+
+    # Currently this only solves exactly, but want to fallback to inexact bounds.
+    exact = True
+
+    domain = Type_to_Set(sym.var_type)
+    if getattr(sym, 'member_of', None) and isinstance(sym.member_of, SetObject):
+        bounds, exact_ = sym.member_of.get_bounds()
+        if bounds:
+            domain = bounds
+            exact = exact_
+
+    constraints = constraints + dsl._ctx.constraints
+
+    # First break apart any Ands into a list of constraints, 'ineqs'
+
+    ineqs = []
+    def process_expr(expr):
+        if isinstance(expr, sympy.And):
+            for form in expr.args:
+                process_expr(form)
+        elif isinstance(expr, sympy.Or):
+            assert False, "Unimplemented"
+        elif expr.is_Relational:
+            ineqs.append(expr)
+        else:
+            assert False
+            exact = False
+
+    for cons in constraints:
+        # FIXME: any ignored constraint can lead to inexact bounds. But
+        # we add all constraints from ineqs!
+        # Am I sure the bounds returned from sympy are otherwise always exact? Can it ignore some?
+
+        free_syms = cons.free_symbols
+        if sym not in free_syms:
+            print("find_var_bounds: Ignoring", cons)
+            continue
+
+        # if len(free_syms) > 1:
+        #     # Sympy may not be able to solve it.
+        #     # TODO: try to solve with Z3.
+        #     pass
+
+        process_expr(cons)
+
+
+
+    # reduce_inequalities can tolerate multiple variables (does nothing clever) and also calls
+    # reduce_abs_inequalities. solve_univariate_inequality seems to be able to handle a single Abs
+    # but not nested ones:
+    # >>> solve_univariate_inequality(Abs(Abs(y)-2)<30, y)
+    # True
+    # >>> reduce_inequalities(Abs(Abs(y)-2)<30, y)
+    # (-32 < y) & (y < 32)
+    # (Note: if variables aren't marked real=True, sympy adds constraints like (x < oo))
+
+    # First try to simplify
+    #print(f"find_var_bounds({sym}): ineqs {ineqs}, domain {domain}")
+    # Quite a lot of machinery in these functions
+    #intervals = sympy.solve_univariate_inequality(ineqs, sym, relational = False, domain = domain)
+    solved_ineqs = sympy.reduce_inequalities(ineqs, sym)
+
+    # Relational.as_set() works by calling solve_univariate_inequality on each Relational,
+    # and combines across Boolean operators.
+    # This means solve_univariate_inequality gets called twice, yuck, but can't pass
+    # relational=False via any wrapper functions (except solveset).
+    intervals = solved_ineqs.as_set()
+    # as_set() ignores the domain, assumes Reals. Fix.
+    intervals = intervals.intersection(Type_to_Set(sym.var_type))
+
+    print(f"find_var_bounds({sym}, {constraints}) = {intervals}")
+    return intervals, exact
+
+
+def get_var_iterator(sym, constraints):
     "Given a symbol, type, constrains, produce an iterator for it."
-    if sym.var_type == Int:
-        bounds = (-1000, 1000)  # FIXME
+
+
+    intervals, exact = find_var_bounds(sym, constraints)
+
+
+    # if sym.var_type == Int:
+    #     bounds = (-1000, 1000)  # FIXME
+
+def get_set_size(set: sympy.Set) -> tyUnion[int, sympy.Expr, None]:
+    "Can return oo"
+    if hasattr(set, 'size'):  # Could be a SetObject or sympy.Range
+        return set.size  # Expr
+    elif hasattr(set, '__len__'):  # Could be a sympy.FiniteSet
+        return len(it)  # int
+    elif set.is_empty == True:
+        return 0
+    elif set.is_finite_set == False:
+        return oo
 
 
 
-class SetObject(sympy.Set):  #sympy.Basic):
-    "An unknown finite or infinite sequence"
+class SetObject(sympy.Set):
+    """An unknown finite or infinite set (or subclassed, a sequence).
+    Should be constructed with one of:
+    -uninterpreted_set
+    -set_generator
+    -set_function
+     -finite_set_constructor
 
-    tempvar_ctr = 1
-    tempvar_id = None
+    Or for a SeqObject:
+    -uninterpreted_seq
+    -seq_generator
+    """
 
-    evaluated = None  # False if couldn't eval
-    length = None  # Maybe a symbol, int, or oo. None if unknown. TODO: allow Expr
-    is_Seq = False
-    #element_vars = None  # New variables for the elements
-    elements_are_sorted = False  # Contents of evaluated ascending
+    # Class variable
+    object_ctr = 1
+    # Instance variable. Unique ID for this SetObject, used to name unique element variables
+    object_id = None
 
+    evaluated = None  # False if couldn't eval, otherwise list of contents. Distinct for sets.
     partial_elements: dict = None  # If we know some elements, put here
+
+    size: sympy.Expr = None         # An expression for the cardinality/length. May be oo, None if unknown
+    int_size: int = None            # size as a python int, if constant
+    size_ubound: sympy.Expr = None  # An upper bound on size. Ignored if size known
+    #bounds: sympy.Set = None        # Bounds. May be a Range or Interval
+
+    #element_vars = None  # New variables for the elements
+    elements_are_sorted = False  # Contents of evaluated are ascending
+
     _added_expr_constraints = False
 
-    # For generators: is a generate if has an expr
+    # For generator expressions. This object is a genexpr if expr != None
     expr = None
-    syms = None
+    syms = None  # Mapping from symbols to Types
     constraints = None
 
     def __new__(cls, *args):
         ret = super().__new__(cls, *args)
-        ret.tempvar_id = SetObject.tempvar_ctr
-        SetObject.tempvar_ctr += 1
+        ret.object_id = SetObject.object_ctr
+        SetObject.object_ctr += 1
         ret.partial_elements = {}
         ret.constraints = []
         return ret
@@ -202,8 +342,8 @@ class SetObject(sympy.Set):  #sympy.Basic):
         return self.__str__()
 
     def __str__(self):
-        name = 'Seq' if self.is_Seq else 'Set'
-        if self.evaluated is not None:
+        name = 'Seq' if isinstance(self, SeqObject) else 'Set'
+        if self.evaluated not in (None, False):
             return f"{name}Object({self.evaluated[:10]}...?)"
         elif self.expr is not None:
             return f"{name}Object({self.expr}, {self.syms}, {self.constraints})"
@@ -220,13 +360,16 @@ class SetObject(sympy.Set):  #sympy.Basic):
         if self.expr is None:
             return False
 
+        print("try_eval", self, self.constraints)
+
         func = sympy.lambdify(self.syms, self.expr)
         iterators = []
 
         result = []
 
         for sym in self.syms:
-            iterators.append(get_type_iterator(sym, self.constraints))
+            print("sym", sym, repr(sym), sym.var_type)
+            iterators.append(get_var_iterator(sym, self.constraints))
             
 
         #for a in 
@@ -235,48 +378,47 @@ class SetObject(sympy.Set):  #sympy.Basic):
 
 
     def inst_element_list(self, tryagain = False):
-        """Get a finite list of elements, creating new symbols as neededs.
-        Return elements or None"""
+        """Instantiate a complete finite list of elements, creating new symbols as neededs.
+        Return (elements, None) or (None, reason_string) if can't return a finite list."""
         if self.try_eval(tryagain):
-            return self.evaluated
-        assert self.evaluated is None
+            return self.evaluated, None
         # if self.element_vars is not None:
         #     return self.element_vars,
-        if self.length is None:
-            return None  # Can't
-        self.length = sympy.simplify(self.length)
-        if not self.length.is_Integer:
-            return None
-        length = int(self.length)
+
+        size = self.eval_size()
+
+        if self.size is None:
+            return None, "unknown size"
+        self.size = sympy.simplify(self.size)
+
+        size = to_int(self.size)
+        if size is None:
+            return None, "non-constant size"
+
+        if size > 4000:
+            print(f"Refusing to instantiate {size} elements")
+            return None, f"too many ({size}) elements"
 
         # Create individual vars
-        print(self, "going to instaniate elmeents. eltype = ", self.element_type)
+        print(self, "going to instaniate elements. eltype = ", self.element_type)
 
-        varname = "element_" + str(self.tempvar_id) + "_"
-        element_vars = []
-        for idx in range(length):
-            if idx in self.partial_elements:
-                elmt = self.partial_elements[idx]
-            else:
-                # partial_elements is None or missing the element
-                elmt = declarevar(varname + str(idx), self.element_type)
-                # Apply any constraints to each element. Need to rewrite bound vars!
-                self.add_constraints_for_generated_element(elmt)
-
-            element_vars.append(elmt)
+        element_vars = [self._get_or_generate_element_var(idx) for idx in range(size)]
 
         self.partial_elements = {}  # No longer useful
 
-        if self.is_Seq == False:
+        if isinstance(self, SeqObject) == False:
+            print ("SORTING!")
             self.elements_are_sorted = True
             # Put the elements in order. More efficient anyway
-            for idx in range(length - 1):
+            for idx in range(size - 1):
                 dsl.constraint(element_vars[idx] <= element_vars[idx + 1])
         self.evaluated = element_vars
-        return self.evaluated
+        return self.evaluated, None
 
     def membership_constraints(self, elmt):
         "Given elmt ∈ self (not bound args), return constraints as an Exists, or empty list"
+        # Note that this is quite comparable to sympy.ConditionSet.as_relational()
+
         # We could have used a single ForAll for all set elements, but z3 needs to expand those out as
         # follows anyway.
         if self.expr is not None:
@@ -298,10 +440,14 @@ class SetObject(sympy.Set):  #sympy.Basic):
 
                 # TODO: merge this path with add_element_of_constraints()
                 # TODO: add recursion testcase
-                if hasattr(sym, 'var_in_set') and isinstance(sym.var_in_set, SetObject):
-                    constraints.append( sym.var_in_set.membership_constraints(newsym) )
+                assert hasattr(sym, 'member_of')
+                if isinstance(sym.member_of, SetObject):
+                    constraints.append( sym.member_of.membership_constraints(newsym) )
+                else:
+                    # Element of a named_set, so the variable's var_type is the only constraint
+                    pass
                 # TODO: add integer constraint
-                # if sym.var_in_set == Int:
+                # if sym.member_of == Integers:
                 #     constraints.append( Mod(sym, 
 
             # The element is equal to the expr
@@ -322,6 +468,16 @@ class SetObject(sympy.Set):  #sympy.Basic):
         if cons is not True:
             dsl.constraint(cons)
 
+    def _get_or_generate_element_var(self, idx):
+        "Create a variable for an unknown element if it doesn't already exist"
+        if idx in self.partial_elements:
+            return self.partial_elements[idx]
+        elmt = declarevar(f"element_{self.object_id}_{idx}", self.element_type)
+        # Apply any constraints to each element. Need to rewrite bound vars!
+        self.add_constraints_for_generated_element(elmt)
+        self.partial_elements[idx] = elmt
+        return elmt
+
     def add_constraints_for_expression(self):
         # Easy, since the bound variables are the same in expr, constraints, and
         if self._added_expr_constraints: return
@@ -332,25 +488,115 @@ class SetObject(sympy.Set):  #sympy.Basic):
             dsl.constraint(cons)
         # Bound vars belong to their sets
         for bvar in self.syms:
-            if bvar.var_in_set is not None:
-                add_element_of_constraint(bvar, bvar.var_in_set)
+            if bvar.member_of is not None:
+                add_element_of_constraint(bvar, bvar.member_of)
 
-    # Basic.count() is for counting subexprs
-    # Set.measure() is for the measure of intervals/etc
-    # Python disallowes __len__ to return a non-int
-    def len(self):
-        if self.length is not None:
-            return self.length
-        if self.try_eval():
-            self.length = len(self.evaluated)
-            return self.length
+    def get_bounds(self) -> Tuple[sympy.Set, bool]:
+        """Get bounds on the elements, and the exactness of the bounds.
+        Should only be called if the element type is numeric."""
+        # if self.bounds is not None:
+        #     return self.bounds
+        if not Type_is_number(self.element_type):
+            raise TypeError(f"Can't call get_bounds on {self.element_type}-typed {self}")
+
+        if self.expr is not None:
+            if len(self.syms) != 1:
+                raise NotImplementedError("get_bounds: multiple index variables")
+            intervals, exact = find_var_bounds(self.syms[0], self.constraints)
+            return intervals, exact
+
+        if isinstance(self, SeqObject):
+            pass
+
+        if self.evaluated is not None:
+            # TODO: need to distinguish symbolic/unknown elements from numerical ones
+            # We probably wouldn't call this anyway?
+            raise NotImplementedError("Compute get_bounds from .evaluated")
+        # if self.element_type is Complex:
+        #     print("WARN: Stub get_bounds() for seq/set of complex numbers")
+        #     #raise NotImplementedError("Bounds for seq/set of complex numbers")
+        #     return sympy.Complexes
+        exact = False
+        return Type_to_Set(self.element_type), exact
+
+    def compute_generator_size(self) -> Optional[sympy.Expr]:
+        "Attempts to find an expression for self.size, or otherwise self.size_ubound, or returns None on failure."
+        if self.expr is None:
+            return None  # Not a genexpr
+        #iterators = []
+        sizes = []
+        is_exact = isinstance(self, SeqObject)
+        for sym in self.syms:
+            intervals, exact = find_var_bounds(sym, self.constraints)
+            is_exact &= exact
+            #it = get_var_iterator(sym, self.constraints)
+            #iterators.append(it)
+            #print(f"get_set_size {intervals} = {get_set_size(intervals)}")
+            sizes.append(get_set_size(intervals))
+
+        product = sympy.Mul(*sizes)
+
+        if is_exact:
+            print("compute_generator_size: exact size =", product)
+            self.size = product
+        else:
+            # SetObject
+            if self.size_ubound:
+                self.size_ubound = sympy.Min(self.size_ubound, product)
+            else:
+                self.size_ubound = product
+            print("compute_generator_size: size_ubound =", self.size_ubound)
+        return self.size
+
+    def size_expr(self, evaluate = False) -> Optional[sympy.Expr]:
+        "Return an expression for the size/length, or None is unknown."
+        if self.size is not None:
+            return self.size.doit()
+        if isinstance(self, SeqObject):
+            self.compute_generator_size()
+            return self.size
+
+    # sympy.Basic.count() is for counting occurrences of subexprs
+    # sympy.Set.measure() is for the measure of intervals/etc
+    # sympy.Range (which is a Set) has a.size property and __len__(), but sympy.Interval (also a Set) has neither.
+    # Python disallows __len__ to return a non-int
+    # self.size is an Expr
+    #def len(self, evaluate = True):
+    def eval_size(self, evaluate = False) -> tyUnion[None, sympy.Integer, Infinity]:
+        """Try to figure out the size/length an Integer or oo.
+        evaluate: if True, enumerate all set elements if necessary.
+        """
+        if self.size is None:
+            # If this is a set then the generator size only gives an upper bound.
+            if isinstance(self, SeqObject):
+                self.compute_generator_size()
+            if self.size is None:
+                return None
+        self.size = sympy.simplify(self.size)
+        if isinstance(self.size, sympy.Integer):
+            return self.size
+        if evaluate and self.try_eval():
+            self.size = sympy.Integer(len(self.evaluated))
+            return self.size
         return None
 
+    def _eval_is_empty(self):
+        size = to_int(self.eval_size(evaluate = False))
+        if size is None:
+            return None
+        return size == 0
+
+    def _eval_is_finite_set(self):
+        size = self.eval_size(evaluate = False)
+        if size is None:
+            return None
+        return size.is_finite
+
     def __contains__(self, obj):
-        """Overrides Set.__contains__ which always returns true/false.
+        """Overrides Set.__contains__ which always returns True/False.
         We instead use 'in' to construct Contains objects.
-        NOTE: actually we don't, parser replaces 'in' with Element!
-        Note: in general should call add_set_element_constraint()
+        NOTE: actually we normally don't, parser replaces 'in' with Element!
+        NOTE: in general should call and add .membership_constraints()
         """
         # DON'T USE THIS!, missing .membership_constraints!
         return sympy.Contains(obj, self, evaluate = False)
@@ -363,6 +609,7 @@ class SetObject(sympy.Set):  #sympy.Basic):
     #     return None
 
     def __getitem__(self, idx):
+        "Overridden by SeqObject."
         raise DSLError("Can't index a set")
 
     def __call__(self, idx):
@@ -371,7 +618,6 @@ class SetObject(sympy.Set):  #sympy.Basic):
 
 class SeqObject(SetObject):
     "Slightly specialised"
-    is_Seq = True
     kind = SeqKind
 
     def __getitem__(self, idx):
@@ -383,37 +629,30 @@ class SeqObject(SetObject):
         except TypeError:
             raise NotImplementedError("Only constant sequence indices supported.")
 
-        if self.length is None:
+        length = to_int(self.eval_size())
+        if length is None:
             if idx < 0:
-                raise DSLError("Can't index seq of unknown len from the end")
+                raise DSLError("Can't index sequence of unknown length from the end")
         else:
             if idx < 0:
-                idx += self.length
-            if idx < 0 or idx >= self.length:
+                idx += length
+            if idx < 0 or idx >= length:
                 return sympy.Integer(0)   #FIXME: correct type
 
-        elements = self.inst_element_list()
-        if elements is not None:
-            return elements[idx]
-
-        if idx in self.partial_elements:
-            return self.partial_elements[idx]
-
-        varname = "element_" + str(self.tempvar_id) + "_"
-        for idx in range(self.length):
-            if idx in self.partial_elements:
-                # Already done
-                elmt = self.partial_elements[idx]
-            else:
-                elmt = declarevar(varname + str(idx), self.element_type)
-                self.add_constraints_for_generated_element(elmt)
-
-        self.partial_elements[idx] = elmt
-        return elmt
+        #elements = self.inst_element_list()
+        #if elements is not None:
+        #    return elements[idx]
+        if self.evaluated:
+            return self.evaluated[idx]
+        return self._get_or_generate_element_var(idx)
 
 
-
-def set_constructor(*args):
+def set_function(*args):
+    """DSL set() function. Args may be:
+    -a list of set elements
+    -a generator expression, which will have been converted by the parser to SetObject
+    -a SetObject or SeqObject
+    """
     if len(args) == 1:
         obj = args[0]
         if isinstance(obj, SeqObject):
@@ -426,30 +665,37 @@ def set_constructor(*args):
 
 
 def finite_set_constructor(objects):
+    "set() with finite args, including {a, b, ...} syntax"
     print("FINITE_SET_CONSTRUCTOR", objects)
     obj = SetObject()
     obj.evaluated = objects
     obj._args = [objects]
+    obj.is_iterable = True
+    obj.is_finite_set = True
     return obj
 
-def make_set_symbol(name, element_type = None, length = None):
+def uninterpreted_set(name, element_type = None, size = None):
+    "Create a SetObject variable from a type annotation (with no definition)"
     fakeargs = sympy.Dummy(name)
     obj = SetObject(fakeargs)
     obj.element_type = element_type
-    obj.length = length
+    obj.size = size
     return obj
 
-def make_seq_symbol(name, element_type = None, length = None):
+def uninterpreted_seq(name, element_type = None, size = None):
+    "Create a SeqObject variable from a type annotation (with no definition)"
     fakeargs = sympy.Dummy(name)
     obj = SeqObject(fakeargs)
     obj.element_type = element_type
-    obj.length = length
+    obj.size = size
     return obj
 
 
-def set_generator(expr, vars, make_seq, *constraints):
-    print("SETCONSTR", expr, vars, constraints)
-    # We're meant to be immutable, so make sure have unique args so don't get cache-replaced
+def set_generator(expr, vars, *constraints, make_seq = False):
+    "set generator expressions (comprehensions), or seq genexprs when make_seq=True"
+    print(f"set_generator(expr = {expr}, vars = {vars}, {constraints}, make_seq={make_seq})")
+    # Sympy Basic objects are immutable and cached, so make sure have unique args so don't get cache-replaced.
+    # Of course, dummy with a bizarrely illegal name also lets us print nicely.
     fakeargs = sympy.Dummy(f"{expr}, {vars}, {constraints}")
     if make_seq:
         obj = SeqObject(fakeargs)
@@ -466,20 +712,24 @@ def set_generator(expr, vars, make_seq, *constraints):
         dummy = dsl._ctx.locals[vname]
         sym = declarevar(vname, vtype)
         # The symbol can inherit membership info directly
-        sym.var_in_set = vset
+        sym.member_of = vset
         syms.append(sym)
-        print(f"set_generator: replacing {dummy} with real {sym}")# {type(sym)}")
+        #print(f"  set_generator: replacing {dummy} with new bound var {sym}")# {type(sym)}")
         expr = expr.xreplace({dummy : sym})
         constraints = [cons.xreplace({dummy : sym}) for cons in constraints]
 
     #print("expr now", expr)
-    obj.element_type = get_type_of_expr(expr)
+    obj.element_type = get_Type_of_expr(expr)
     #obj.element_kind = 
     obj.expr = expr
     obj.syms = syms
     obj.constraints = constraints
+    obj.is_iterable = True
 
     return obj
+
+def seq_generator(*args):
+    return set_generator(*args, make_seq = True)
 
 
 # NOT USED
@@ -492,7 +742,7 @@ class ζObjectSymbol(sympy.Symbol):
     "A variable with some object type like sympy.Point"
     kind = UndefinedKind
 
-def get_type_of_expr(expr : sympy.Expr):
+def get_Type_of_expr(expr : sympy.Expr):
     if hasattr(expr, 'var_type'):
         return expr.var_type
 
@@ -502,13 +752,12 @@ def get_type_of_expr(expr : sympy.Expr):
     if expr.is_integer:
         return Int
     elif expr.is_rational:
-        return Rational # == Real
+        return Rat # == Real
     elif not expr.is_real:
         if expr.is_complex:
             return Complex
         raise NotImplementedError(f"Variable {expr} has unknown domain {expr.assumptions0}")
     raise NotImplementedError(f"Variable {expr} has unknown domain {expr.var_type}")
-
 
 def getkind(expr):
     if not hasattr(expr, 'kind'):
@@ -524,11 +773,29 @@ def to_NumberKind(expr):
         expr.kind = NumberKind
     return expr
 
+def to_int(x):
+    "Convert to Python int if is an integer."
+    if isinstance(x, int):
+        return x
+    if isinstance(x, float):
+        if x == int(x):
+            return x
+    if isinstance(x, sympy.Expr):
+        #x = x.doit()
+        # BTW, Float._eval_is_integer for some reason tests == 0.
+        try:
+            toint = int(x)
+            if Eq(toint, x):
+                return toint
+        except TypeError:
+            pass
+
 def is_a_constant(x):
     # Note Expr.is_constant() returns True for expressions like summations with no free symbols
     if isinstance(x, (int, float)):
         return True
     if isinstance(x, sympy.Basic):
+        # Note: False for Symbol, even if real=True
         return x.is_number
     return False
 
@@ -593,7 +860,7 @@ def declarevar(name, Type):
         float: Real,
         sympy.Reals: Real,
         sympy.Complexes: Complex,
-        dsl.set: Set(Real),  # :/
+        dsl.set: SetType(Real),  # :/
     }
     Type = rewrites.get(Type, Type)
 
@@ -643,16 +910,16 @@ def constraint_hook(expr):
     if isinstance(expr, sympy.Contains):
         sym = expr.args[0]
         theset = expr.args[1]
-        if not(hasattr(sym, 'var_in_set')):
+        if not(hasattr(sym, 'member_of')):
             # Something like "seqA in seqB"
-            print("WARNING: Contains but sym missing .var_in_set")
-            #assert False, "Contains but sym missing .var_in_set"
+            print("WARNING: Contains but sym missing .member_of")
+            #assert False, "Contains but sym missing .member_of"
         else:
-            if sym.var_in_set is not None and sym.var_in_set != theset:
+            if sym.member_of is not None and sym.member_of != theset:
                 # This is ok, it's in the intersection.
-                print(f"NOTE: {sym} in {theset}, but {sym} already in {sym.var_in_set}")
+                print(f"NOTE: {sym} in {theset}, but {sym} already in {sym.member_of}")
             else:
-                sym.var_in_set = theset
+                sym.member_of = theset
 
 
 def add_element_of_constraint(elmt, set_or_Type):

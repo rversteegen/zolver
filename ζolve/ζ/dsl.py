@@ -1,6 +1,7 @@
 """
 This module contains all the names visible as globals to DSL scripts
 (plus Python builtins).
+
 Variable types/declarations are handled here, and classes for some symbolic
 (unevaluated) expressions sympy doesn't provide.
 """
@@ -8,8 +9,6 @@ Variable types/declarations are handled here, and classes for some symbolic
 import builtins
 import sympy
 from sympy import *
-#from types import FunctionType
-from sympy.series.sequences import SeqBase
 from ζ.dsl_impl import *
 
 
@@ -30,6 +29,7 @@ def variable(name, **constraints):
 #     _ctx.variables.append(sym)
 #     return sym
 
+
 ###############################################################################
 ### DSL Statements
 
@@ -38,7 +38,7 @@ def constraint(*exprs):
     for expr in exprs:
         print(f":constraint({expr})")
         assert_boolean_kind(expr, "Constraint")
-        _ctx.facts.append(expr)
+        _ctx.constraints.append(expr)
         # Special case logic
         constraint_hook(expr)
     #return exprs
@@ -47,6 +47,18 @@ def goal(expr):
     "Pointlessly translated from 'answer = expr'."
     print(f"goal({expr})")
     _ctx.goal = expr
+
+
+###############################################################################
+### Types
+
+Set = SetType
+Seq = SeqType
+Function = FunctionType
+Rational = Rat
+
+Sym = sympy.Symbol  # LLM oddity
+
 
 ###############################################################################
 ### Functions
@@ -63,7 +75,7 @@ def Element(a, b):
     #     return And(ret, membership)
     return ret
 
-set = set_constructor
+set = set_function
 
 
 max = wrap_max
